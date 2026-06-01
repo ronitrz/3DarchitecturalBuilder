@@ -211,13 +211,21 @@ html, body {
 ────────────────────────────────────── */
 #sidebar-left {
   width: var(--sidebar-left-w);
-  min-width: var(--sidebar-left-w);
+  min-width: 0;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  transition: width 0.28s cubic-bezier(0.4,0,0.2,1),
+              min-width 0.28s cubic-bezier(0.4,0,0.2,1);
+  flex-shrink: 0;
+}
+
+#sidebar-left.collapsed {
+  width: 0;
+  border-right-color: transparent;
 }
 
 .sidebar-search-wrap {
@@ -507,12 +515,21 @@ html, body {
 ────────────────────────────────────── */
 #sidebar-right {
   width: var(--sidebar-right-w);
-  min-width: var(--sidebar-right-w);
+  min-width: 0;
   background: var(--bg-surface);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  transition: width 0.28s cubic-bezier(0.4,0,0.2,1),
+              min-width 0.28s cubic-bezier(0.4,0,0.2,1);
+  flex-shrink: 0;
+}
+
+#sidebar-right.collapsed {
+  width: 0;
+  border-left-color: transparent;
 }
 
 .properties-header {
@@ -915,3 +932,153 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   margin: 0 1px;
 }
 
+/* ──────────────────────────────────────
+   SIDEBAR TOGGLE TABS
+────────────────────────────────────── */
+.sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 52px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  transition: color var(--transition), background var(--transition),
+              box-shadow var(--transition);
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  color: var(--accent-bright);
+  background: var(--bg-overlay);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.sidebar-toggle-left {
+  right: -20px;
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.sidebar-toggle-right {
+  left: -20px;
+  border-right: none;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+/* When sidebar is collapsed the toggle sticks out of the layout */
+#sidebar-left.collapsed .sidebar-toggle-left  { right: -20px; }
+#sidebar-right.collapsed .sidebar-toggle-right { left: -20px; }
+
+/* ──────────────────────────────────────
+   CONTEXT MENU
+────────────────────────────────────── */
+#ctx-menu {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  min-width: 160px;
+  z-index: 10000;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  animation: fadeIn 0.12s ease;
+}
+
+#ctx-menu.visible { display: flex; }
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  text-align: left;
+  transition: all var(--transition);
+  width: 100%;
+}
+
+.ctx-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-active);
+}
+
+.ctx-danger { color: var(--red) !important; }
+.ctx-danger:hover { background: rgba(239,68,68,0.12) !important; }
+
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 4px;
+}
+
+/* ──────────────────────────────────────
+   SPRINT / SPEED INDICATOR
+────────────────────────────────────── */
+#sprint-indicator {
+  position: absolute;
+  top: 52px;
+  right: 12px;
+  background: rgba(245,158,11,0.18);
+  border: 1px solid rgba(245,158,11,0.4);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--amber);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  display: none;
+  letter-spacing: 0.5px;
+}
+
+#sprint-indicator.active { display: block; }
+
+/* Ghost rotation tip */
+#ghost-rotate-tip {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13,17,23,0.9);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 14px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  display: none;
+  white-space: nowrap;
+}
+
+#ghost-rotate-tip.visible { display: block; }
+#ghost-rotate-tip kbd {
+  display: inline-block;
+  background: var(--bg-overlay);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 9px;
+  color: var(--accent-bright);
+  font-family: var(--font);
+  margin: 0 1px;
+}

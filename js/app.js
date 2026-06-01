@@ -5,10 +5,17 @@
 'use strict';
 
 // ══════════════════════════════════════════════════════════════
-//  CAMERA MOVEMENT KEYS
+//  CAMERA MOVEMENT — velocity based
 // ══════════════════════════════════════════════════════════════
-var _keys = {};
-var MOVE_SPEED = 0.18;
+var _keys   = {};
+var _camVel = null;                  // initialized in init() after THREE loads
+var CAM_ACCEL   = 0.06;              // acceleration per frame
+var CAM_FRICTION = 0.80;             // velocity damping (0=instant stop, 1=no stop)
+var CAM_MAX     = 0.55;              // max speed (normal)
+var CAM_SPRINT  = 2.8;              // sprint multiplier (Shift)
+
+// Ghost placement rotation
+var _ghostYaw = 0;                   // radians
 
 // ══════════════════════════════════════════════════════════════
 //  APPLICATION STATE
@@ -96,6 +103,7 @@ function init() {
   App.raycaster   = new THREE.Raycaster();
   App.groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   App.intersectPt = new THREE.Vector3();
+  _camVel         = new THREE.Vector3();
 
   setupLights();
   setupGround();
@@ -104,6 +112,8 @@ function init() {
   setupOrbitControls();
   setupTransformControls();
   buildUI();
+  setupContextMenu();
+  setupSidebarToggles();
   setupEvents();
   setupKeyboard();
   resize();
@@ -115,6 +125,18 @@ function init() {
   toast.id = 'toast';
   document.body.appendChild(toast);
 
+  // Sprint indicator
+  var sprint = document.createElement('div');
+  sprint.id = 'sprint-indicator';
+  sprint.textContent = '⚡ SPRINT';
+  document.getElementById('viewport').appendChild(sprint);
+
+  // Ghost rotation tip
+  var grtip = document.createElement('div');
+  grtip.id = 'ghost-rotate-tip';
+  grtip.innerHTML = '<kbd>Q</kbd> rotate left · <kbd>E</kbd> rotate right · <kbd>Scroll</kbd> adjust height';
+  document.getElementById('viewport').appendChild(grtip);
+
   // WASD hint overlay
   var hint = document.createElement('div');
   hint.id = 'wasd-hint';
@@ -122,6 +144,7 @@ function init() {
     '<kbd>W</kbd> Forward &nbsp; <kbd>S</kbd> Back<br>' +
     '<kbd>A</kbd> Left &nbsp;&nbsp;&nbsp; <kbd>D</kbd> Right<br>' +
     '<kbd>▲</kbd> Up &nbsp;&nbsp;&nbsp;&nbsp; <kbd>▼</kbd> Down<br>' +
+    '<kbd>Shift</kbd> Sprint &nbsp; <kbd>F</kbd> Focus<br>' +
     '<span style="color:var(--text-muted);font-size:9px">Hold keys to fly camera</span>';
   document.getElementById('viewport').appendChild(hint);
 
@@ -462,7 +485,8 @@ function updateGhostPosition() {
   var pt = getGroundIntersection();
   if (!pt) return;
   var snapped = snapToGrid(pt);
-  App.ghostObject.position.set(snapped.x, 0, snapped.z);
+  App.ghostObject.position.set(snapped.x, App._ghostHeight || 0, snapped.z);
+  App.ghostObject.rotation.y = _ghostYaw;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1178,6 +1202,8 @@ function filterElements(query) {
 function setActiveTool(elementId) {
   App.activeTool = elementId;
   App.activeMode = 'place';
+  _ghostYaw = 0;
+  App._ghostHeight = 0;
 
   // Update cursor
   document.getElementById('three-canvas').className = 'placing';
@@ -1191,9 +1217,12 @@ function setActiveTool(elementId) {
   deselectObject();
   createGhost(elementId);
 
+  var tip = document.getElementById('ghost-rotate-tip');
+  if (tip) tip.classList.add('visible');
+
   var elem = ELEM_REGISTRY[elementId];
   document.getElementById('hint-text').textContent =
-    'Click to place: ' + (elem ? elem.name : elementId) + ' · Esc to cancel';
+    'Click to place: ' + (elem ? elem.name : elementId) + ' · Q/E rotate · Scroll height · Esc cancel';
   document.getElementById('st-mode').textContent = '⊕ Placing';
   document.getElementById('st-mode').className = 'st-chip st-placing';
 
@@ -1204,6 +1233,11 @@ function setSelectMode() {
   App.activeTool = null;
   App.activeMode = 'select';
   clearGhost();
+  _ghostYaw = 0;
+  App._ghostHeight = 0;
+
+  var tip = document.getElementById('ghost-rotate-tip');
+  if (tip) tip.classList.remove('visible');
 
   document.getElementById('three-canvas').className = '';
   document.querySelectorAll('.elem-btn').forEach(function(b) { b.classList.remove('active'); });
@@ -1242,7 +1276,34 @@ function setupEvents() {
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mouseup', onMouseUp);
-  canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+  // Right-click — context menu (select mode) or cancel (place mode)
+  canvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    if (App.activeMode === 'place') {
+      setSelectMode();
+      return;
+    }
+    if (App.selectedObject) {
+      showContextMenu(e.clientX, e.clientY);
+    }
+  });
+
+  // Mouse wheel — ghost height in place mode, zoom otherwise handled by OrbitControls
+  canvas.addEventListener('wheel', function(e) {
+    if (App.activeMode === 'place' && App.ghostObject) {
+      e.preventDefault();
+      App._ghostHeight = (App._ghostHeight || 0) - e.deltaY * 0.003;
+      App._ghostHeight = Math.max(-2, Math.min(20, App._ghostHeight));
+      updateGhostPosition();
+    }
+  }, { passive: false });
+
+  // Hide context menu on any click
+  document.addEventListener('mousedown', function(e) {
+    var menu = document.getElementById('ctx-menu');
+    if (menu && !menu.contains(e.target)) hideContextMenu();
+  });
 }
 
 function onMouseMove(e) {
@@ -1305,76 +1366,200 @@ function onMouseUp(e) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  CONTEXT MENU
+// ══════════════════════════════════════════════════════════════
+function showContextMenu(x, y) {
+  var menu = document.getElementById('ctx-menu');
+  // Position with viewport clamping
+  var mw = 170, mh = 210;
+  var cx = Math.min(x, window.innerWidth  - mw - 8);
+  var cy = Math.min(y, window.innerHeight - mh - 8);
+  menu.style.left = cx + 'px';
+  menu.style.top  = cy + 'px';
+  menu.classList.add('visible');
+}
+
+function hideContextMenu() {
+  document.getElementById('ctx-menu').classList.remove('visible');
+}
+
+function setupContextMenu() {
+  document.getElementById('ctx-move').addEventListener('click',   function() { setTransformMode('translate'); hideContextMenu(); });
+  document.getElementById('ctx-rotate').addEventListener('click', function() { setTransformMode('rotate');    hideContextMenu(); });
+  document.getElementById('ctx-scale').addEventListener('click',  function() { setTransformMode('scale');     hideContextMenu(); });
+  document.getElementById('ctx-focus').addEventListener('click',  function() { focusSelected();               hideContextMenu(); });
+  document.getElementById('ctx-dup').addEventListener('click',    function() { duplicateSelected();           hideContextMenu(); });
+  document.getElementById('ctx-del').addEventListener('click',    function() { deleteSelected();              hideContextMenu(); });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  FOCUS CAMERA ON SELECTED
+// ══════════════════════════════════════════════════════════════
+function focusSelected() {
+  if (!App.selectedObject) return;
+  var bbox = new THREE.Box3().setFromObject(App.selectedObject);
+  var center = new THREE.Vector3();
+  bbox.getCenter(center);
+  var size = new THREE.Vector3();
+  bbox.getSize(size);
+  var radius = Math.max(size.x, size.y, size.z) * 1.8 + 1.5;
+
+  // Move camera to orbit around the object
+  var dir = App.camera.position.clone().sub(App.orbitControls.target).normalize();
+  var newPos = center.clone().add(dir.multiplyScalar(radius));
+  App.camera.position.copy(newPos);
+  App.orbitControls.target.copy(center);
+  App.orbitControls.update();
+  showToast('Focused on: ' + (App.selectedObject.userData.elementName || App.selectedObject.name), '');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SIDEBAR TOGGLES
+// ══════════════════════════════════════════════════════════════
+function setupSidebarToggles() {
+  var leftSidebar  = document.getElementById('sidebar-left');
+  var rightSidebar = document.getElementById('sidebar-right');
+  var leftBtn      = document.getElementById('toggle-left');
+  var rightBtn     = document.getElementById('toggle-right');
+  var leftIcon     = document.getElementById('toggle-left-icon');
+  var rightIcon    = document.getElementById('toggle-right-icon');
+
+  function toggleLeft() {
+    var collapsed = leftSidebar.classList.toggle('collapsed');
+    leftIcon.textContent  = collapsed ? '▶' : '◀';
+    leftBtn.title = collapsed ? 'Show panel ([)' : 'Hide panel ([)';
+    // Give renderer a frame to see new size
+    setTimeout(resize, 300);
+  }
+
+  function toggleRight() {
+    var collapsed = rightSidebar.classList.toggle('collapsed');
+    rightIcon.textContent  = collapsed ? '◀' : '▶';
+    rightBtn.title = collapsed ? 'Show panel (])' : 'Hide panel (])';
+    setTimeout(resize, 300);
+  }
+
+  leftBtn.addEventListener('click', toggleLeft);
+  rightBtn.addEventListener('click', toggleRight);
+
+  // Keyboard shortcut [ and ]
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === '[') toggleLeft();
+    if (e.key === ']') toggleRight();
+    if (e.key === '\\') { toggleLeft(); toggleRight(); } // \ = both at once
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
 //  KEYBOARD SHORTCUTS
 // ══════════════════════════════════════════════════════════════
 function setupKeyboard() {
-  // ── Key state tracking for smooth WASD movement ──────────────
+  var MOVEMENT_KEYS = ['w','a','s','d','arrowup','arrowdown','shift'];
+
+  // ── Key state tracking (for smooth velocity movement) ───────────────
   document.addEventListener('keydown', function(e) {
     var k = e.key.toLowerCase();
-    // Track movement keys even when no input focused
-    if (['w','a','s','d','arrowup','arrowdown'].indexOf(k) !== -1) {
-      // But not when typing in an input field
+    if (MOVEMENT_KEYS.indexOf(k) !== -1) {
       if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'TEXTAREA') {
         _keys[k] = true;
-        // Prevent arrow keys scrolling the page
         if (k === 'arrowup' || k === 'arrowdown') e.preventDefault();
+        // Show sprint indicator
+        if (k === 'shift') {
+          var si = document.getElementById('sprint-indicator');
+          if (si) si.classList.add('active');
+        }
       }
     }
   });
   document.addEventListener('keyup', function(e) {
-    _keys[e.key.toLowerCase()] = false;
+    var k = e.key.toLowerCase();
+    _keys[k] = false;
+    if (k === 'shift') {
+      var si = document.getElementById('sprint-indicator');
+      if (si) si.classList.remove('active');
+    }
   });
-  // Clear all keys on window blur so keys don't get stuck
-  window.addEventListener('blur', function() { _keys = {}; });
+  window.addEventListener('blur', function() {
+    _keys = {};
+    var si = document.getElementById('sprint-indicator');
+    if (si) si.classList.remove('active');
+  });
 
-  // ── Shortcut keys ─────────────────────────────────────────────
+  // ── Action shortcuts ─────────────────────────────────────────────
   document.addEventListener('keydown', function(e) {
-    // Don't fire if focused on input
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    var key = e.key;
 
-    switch (e.key) {
+    // ─ Ghost rotate while placing ──────────────────────────
+    if (App.activeMode === 'place') {
+      if (key === 'q' || key === 'Q') {
+        _ghostYaw += Math.PI / 12;  // 15°
+        if (App.ghostObject) App.ghostObject.rotation.y = _ghostYaw;
+        return;
+      }
+      if (key === 'e' || key === 'E') {
+        _ghostYaw -= Math.PI / 12;
+        if (App.ghostObject) App.ghostObject.rotation.y = _ghostYaw;
+        return;
+      }
+      if (key === 'Escape') { setSelectMode(); return; }
+    }
+
+    switch (key) {
       case 'Escape':
-        if (App.activeMode === 'place') setSelectMode();
-        else if (App.activeMode === 'measure') setSelectMode();
+        if (App.activeMode === 'measure') setSelectMode();
         else deselectObject();
         break;
       case 'Delete':
       case 'Backspace':
         deleteSelected();
         break;
-      case 'g':
-      case 'G':
+      // Transform modes
+      case 'g': case 'G':
         if (App.selectedObject) setTransformMode('translate');
         break;
-      case 'r':
-      case 'R':
+      case 'r': case 'R':
         if (App.selectedObject) setTransformMode('rotate');
         break;
-      case 's':
-      case 'S':
+      case 's': case 'S':
         if (App.selectedObject && !e.ctrlKey) setTransformMode('scale');
         break;
-      case 'z':
-      case 'Z':
+      // Focus camera
+      case 'f': case 'F':
+        focusSelected();
+        break;
+      // Undo / redo
+      case 'z': case 'Z':
         if (e.ctrlKey || e.metaKey) { e.preventDefault(); undo(); }
         break;
-      case 'y':
-      case 'Y':
+      case 'y': case 'Y':
         if (e.ctrlKey || e.metaKey) { e.preventDefault(); redo(); }
         break;
-      case 'd':
-      case 'D':
+      // Duplicate
+      case 'd': case 'D':
         if (e.ctrlKey || e.metaKey) { e.preventDefault(); duplicateSelected(); }
         break;
-      case 'n':
-      case 'N':
-        if (e.ctrlKey || e.metaKey) {
-          e.preventDefault();
-          if (confirm('Clear the scene?')) clearScene();
-        }
+      // New scene
+      case 'n': case 'N':
+        if (e.ctrlKey || e.metaKey) { e.preventDefault(); if (confirm('Clear the scene?')) clearScene(); }
         break;
+      // Screenshot
       case 'F2':
         takeScreenshot();
+        break;
+      // Numpad / number keys for transform modes
+      case '1':
+        if (App.selectedObject) setTransformMode('translate');
+        break;
+      case '2':
+        if (App.selectedObject) setTransformMode('rotate');
+        break;
+      case '3':
+        if (App.selectedObject) setTransformMode('scale');
+        break;
+      case '4':
+        if (App.selectedObject) deselectObject();
         break;
     }
   });
@@ -1507,32 +1692,49 @@ function resize() {
 // ══════════════════════════════════════════════════════════════
 //  WASD + ARROW KEY CAMERA MOVEMENT
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  SMOOTH WASD + ARROW CAMERA MOVEMENT (velocity-based)
+// ══════════════════════════════════════════════════════════════
 function updateCameraMovement() {
   var any = _keys['w'] || _keys['s'] || _keys['a'] || _keys['d'] ||
             _keys['arrowup'] || _keys['arrowdown'];
-  if (!any) return;
 
-  // Forward vector (flat, ignoring camera tilt)
+  var sprint = _keys['shift'] ? CAM_SPRINT : 1.0;
+  var maxSpd = CAM_MAX * sprint;
+
+  // Forward / right vectors (flat XZ plane)
   var forward = new THREE.Vector3();
   App.camera.getWorldDirection(forward);
   forward.y = 0;
   if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
   forward.normalize();
 
-  // Right vector
   var right = new THREE.Vector3();
   right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
-  var move = new THREE.Vector3();
-  if (_keys['w'])         move.addScaledVector(forward,  MOVE_SPEED);
-  if (_keys['s'])         move.addScaledVector(forward, -MOVE_SPEED);
-  if (_keys['a'])         move.addScaledVector(right,   -MOVE_SPEED);
-  if (_keys['d'])         move.addScaledVector(right,    MOVE_SPEED);
-  if (_keys['arrowup'])   move.y += MOVE_SPEED;
-  if (_keys['arrowdown']) move.y -= MOVE_SPEED;
+  // Accumulate desired acceleration
+  var accel = new THREE.Vector3();
+  if (_keys['w'])         accel.addScaledVector(forward,  CAM_ACCEL * sprint);
+  if (_keys['s'])         accel.addScaledVector(forward, -CAM_ACCEL * sprint);
+  if (_keys['a'])         accel.addScaledVector(right,   -CAM_ACCEL * sprint);
+  if (_keys['d'])         accel.addScaledVector(right,    CAM_ACCEL * sprint);
+  if (_keys['arrowup'])   accel.y += CAM_ACCEL * sprint;
+  if (_keys['arrowdown']) accel.y -= CAM_ACCEL * sprint;
 
-  App.camera.position.add(move);
-  App.orbitControls.target.add(move);
+  // Apply acceleration and friction
+  _camVel.add(accel);
+  _camVel.multiplyScalar(CAM_FRICTION);
+
+  // Clamp to max speed
+  if (_camVel.length() > maxSpd) _camVel.setLength(maxSpd);
+
+  // Stop tiny drift
+  if (_camVel.lengthSq() < 0.00001) _camVel.set(0, 0, 0);
+
+  if (_camVel.lengthSq() > 0) {
+    App.camera.position.add(_camVel);
+    App.orbitControls.target.add(_camVel);
+  }
 }
 
 function animate() {
