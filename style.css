@@ -638,6 +638,92 @@ html, body {
   text-align: center;
 }
 
+/* Highlighted dimension inputs */
+.dim-input-group label {
+  color: var(--accent-bright);
+  font-size: 9.5px;
+}
+
+.dim-input {
+  border-color: var(--accent-dim) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  text-align: center;
+  color: var(--text-primary) !important;
+}
+
+.dim-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-glow) !important;
+}
+
+/* ──────────────────────────────────────
+   ROTATION CONTROLS
+────────────────────────────────────── */
+.rot-slider-wrap {
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rot-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.rot-slider-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 48px;
+  flex-shrink: 0;
+}
+
+.rot-y-slider { flex: 1; }
+
+.rot-y-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-bright);
+  min-width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rot-presets {
+  display: flex;
+  gap: 4px;
+}
+
+.rot-preset-btn {
+  flex: 1;
+  padding: 5px 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 600;
+  transition: all var(--transition);
+  text-align: center;
+}
+
+.rot-preset-btn:hover {
+  color: var(--accent-bright);
+  border-color: var(--accent-dim);
+  background: var(--bg-active);
+}
+
+.rot-fine-wrap {
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+
 /* Color input */
 .prop-color-wrap {
   display: flex;

@@ -361,6 +361,7 @@ function setCameraView(view) {
 // ══════════════════════════════════════════════════════════════
 function setupTransformControls() {
   App.transformControls = new THREE.TransformControls(App.camera, App.renderer.domElement);
+  App.transformControls.setSize(1.4);  // larger handles — easier to grab
   App.transformControls.addEventListener('dragging-changed', function(e) {
     App.orbitControls.enabled = !e.value;
   });
@@ -504,15 +505,23 @@ function placeElement() {
 
   var dims = Object.assign({}, elem.defaultDims);
   var obj = elem.create(dims);
-  obj.position.set(snapped.x, 0, snapped.z);
+
+  // Record natural (unscaled) size so dimension inputs can derive correct scale
+  var _tempBox = new THREE.Box3().setFromObject(obj);
+  var _natSize = new THREE.Vector3();
+  _tempBox.getSize(_natSize);
+
+  obj.position.set(snapped.x, App._ghostHeight || 0, snapped.z);
+  obj.rotation.y = _ghostYaw;
   obj.userData = {
-    elementId:  elem.id,
+    elementId:   elem.id,
     elementName: elem.name,
-    category:   elem.category,
-    dims:       Object.assign({}, dims),
-    color:      '#ffffff',
-    material:   'default',
-    opacity:    1.0,
+    category:    elem.category,
+    dims:        Object.assign({}, dims),
+    color:       '#ffffff',
+    material:    'default',
+    opacity:     1.0,
+    naturalSize: { x: Math.max(_natSize.x, 0.001), y: Math.max(_natSize.y, 0.001), z: Math.max(_natSize.z, 0.001) },
   };
   obj.name = elem.name + '_' + Date.now();
 
@@ -532,6 +541,19 @@ function placeElement() {
 function selectObject(obj) {
   deselectObject();
   App.selectedObject = obj;
+
+  // Backfill naturalSize for objects loaded from JSON that lack it
+  if (!obj.userData.naturalSize) {
+    var nb = new THREE.Box3().setFromObject(obj);
+    var ns = new THREE.Vector3();
+    nb.getSize(ns);
+    // Divide by current scale to get natural (scale=1) size
+    obj.userData.naturalSize = {
+      x: Math.max(ns.x / obj.scale.x, 0.001),
+      y: Math.max(ns.y / obj.scale.y, 0.001),
+      z: Math.max(ns.z / obj.scale.z, 0.001)
+    };
+  }
 
   // Bounding box
   if (App.bboxHelper) App.scene.remove(App.bboxHelper);
@@ -749,6 +771,37 @@ function showNoSelection() {
     '</div>';
 }
 
+// convert current-unit string to meters
+function parseToMeters(str) {
+  var v = parseFloat(str);
+  if (isNaN(v)) return null;
+  switch (App.units) {
+    case 'mm': return v / 1000;
+    case 'cm': return v / 100;
+    case 'ft': return v / 3.28084;
+    default:   return v;
+  }
+}
+
+// Format a meter value for the dimension INPUT (numeric, no suffix)
+function dimVal(meters) {
+  switch (App.units) {
+    case 'mm': return (meters * 1000).toFixed(0);
+    case 'cm': return (meters * 100).toFixed(1);
+    case 'ft': return (meters * 3.28084).toFixed(3);
+    default:   return meters.toFixed(3);
+  }
+}
+
+function dimStep() {
+  switch (App.units) {
+    case 'mm': return '10';
+    case 'cm': return '1';
+    case 'ft': return '0.1';
+    default:   return '0.01';
+  }
+}
+
 function updatePropertiesPanel() {
   var obj = App.selectedObject;
   if (!obj) { showNoSelection(); return; }
@@ -762,51 +815,67 @@ function updatePropertiesPanel() {
   var size = new THREE.Vector3();
   bbox.getSize(size);
 
+  var unitLabel = App.units;
+  var step = dimStep();
+  var degY = THREE.MathUtils.radToDeg(rot.y).toFixed(1);
+
   var html = '';
 
-  // Element name header
+  // ── Element name ─────────────────────────────────────────────
   html += '<div style="padding:10px 8px 4px">';
   html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary)">' + (ud.elementName || obj.name) + '</div>';
   html += '<div style="font-size:10px;color:var(--text-muted)">' + (ud.category || '') + '</div>';
   html += '</div>';
 
-  // Dimensions
+  // ── Dimensions (editable — directly resize the object) ──────
   html += '<div class="prop-section">';
-  html += '<div class="prop-section-title">Dimensions</div>';
+  html += '<div class="prop-section-title">Dimensions (' + unitLabel + ')';
+  html += '<span style="font-size:9px;color:var(--text-muted);font-weight:400;margin-left:6px">type a value and press Enter</span></div>';
   html += '<div class="prop-3col">';
-  html += propInputGroup('W', formatDim(size.x), 'prop-dim-w', 'number', 'step="0.1"');
-  html += propInputGroup('H', formatDim(size.y), 'prop-dim-h', 'number', 'step="0.1"');
-  html += propInputGroup('D', formatDim(size.z), 'prop-dim-d', 'number', 'step="0.1"');
+  html += dimInputGroup('W', dimVal(size.x), 'prop-dim-w', step);
+  html += dimInputGroup('H', dimVal(size.y), 'prop-dim-h', step);
+  html += dimInputGroup('D', dimVal(size.z), 'prop-dim-d', step);
   html += '</div></div>';
 
-  // Position
+  // ── Position ─────────────────────────────────────────────────
   html += '<div class="prop-section">';
-  html += '<div class="prop-section-title">Position</div>';
+  html += '<div class="prop-section-title">Position (m)</div>';
   html += '<div class="prop-3col">';
   html += propInputGroup('X', pos.x.toFixed(2), 'prop-pos-x', 'number', 'step="0.1"');
   html += propInputGroup('Y', pos.y.toFixed(2), 'prop-pos-y', 'number', 'step="0.1"');
   html += propInputGroup('Z', pos.z.toFixed(2), 'prop-pos-z', 'number', 'step="0.1"');
   html += '</div></div>';
 
-  // Rotation (Y only for simplicity, plus full 3-axis)
+  // ── Rotation ─────────────────────────────────────────────────
   html += '<div class="prop-section">';
-  html += '<div class="prop-section-title">Rotation (°)</div>';
-  html += '<div class="prop-3col">';
-  html += propInputGroup('X°', (THREE.MathUtils.radToDeg(rot.x)).toFixed(1), 'prop-rot-x', 'number', 'step="5"');
-  html += propInputGroup('Y°', (THREE.MathUtils.radToDeg(rot.y)).toFixed(1), 'prop-rot-y', 'number', 'step="5"');
-  html += propInputGroup('Z°', (THREE.MathUtils.radToDeg(rot.z)).toFixed(1), 'prop-rot-z', 'number', 'step="5"');
+  html += '<div class="prop-section-title">Rotation</div>';
+
+  // Y-axis slider (most-used)
+  html += '<div class="rot-slider-wrap">';
+  html += '<div class="rot-slider-row">';
+  html += '<span class="rot-slider-label">Y (turn)</span>';
+  html += '<input type="range" id="rot-y-slider" class="prop-slider rot-y-slider" min="-180" max="180" step="1" value="' + parseFloat(degY).toFixed(0) + '">';
+  html += '<span class="rot-y-val" id="rot-y-display">' + degY + '°</span>';
+  html += '</div>';
+
+  // Quick preset buttons
+  html += '<div class="rot-presets">';
+  var presets = [['–90°','-90'],['Reset','0'],['+90°','90'],['180°','180']];
+  presets.forEach(function(p) {
+    html += '<button class="rot-preset-btn" data-deg="' + p[1] + '">' + p[0] + '</button>';
+  });
+  html += '</div>';
+
+  // Fine-tune X / Y / Z inputs
+  html += '<div class="rot-fine-wrap">';
+  html += '<div class="prop-3col" style="padding:0;margin-top:4px">';
+  html += propInputGroup('X°', (THREE.MathUtils.radToDeg(rot.x)).toFixed(1), 'prop-rot-x', 'number', 'step="1"');
+  html += propInputGroup('Y°', degY, 'prop-rot-y', 'number', 'step="1"');
+  html += propInputGroup('Z°', (THREE.MathUtils.radToDeg(rot.z)).toFixed(1), 'prop-rot-z', 'number', 'step="1"');
+  html += '</div></div>';
   html += '</div></div>';
 
-  // Scale
-  html += '<div class="prop-section">';
-  html += '<div class="prop-section-title">Scale</div>';
-  html += '<div class="prop-3col">';
-  html += propInputGroup('Sx', scl.x.toFixed(2), 'prop-scl-x', 'number', 'step="0.05" min="0.05"');
-  html += propInputGroup('Sy', scl.y.toFixed(2), 'prop-scl-y', 'number', 'step="0.05" min="0.05"');
-  html += propInputGroup('Sz', scl.z.toFixed(2), 'prop-scl-z', 'number', 'step="0.05" min="0.05"');
-  html += '</div></div>';
-
-  // Color & Material
+  // ── Appearance ───────────────────────────────────────────────
   html += '<div class="prop-section">';
   html += '<div class="prop-section-title">Appearance</div>';
 
@@ -834,29 +903,32 @@ function updatePropertiesPanel() {
   });
   html += '</div></div>';
 
-  // Elevation helper
+  // ── Elevation ─────────────────────────────────────────────────
   html += '<div class="prop-section">';
   html += '<div class="prop-section-title">Elevation</div>';
-  html += '<div class="prop-row"><label class="prop-label">Floor Y</label>';
+  html += '<div class="prop-row"><label class="prop-label">Floor Y (m)</label>';
   html += '<input type="number" class="prop-input" id="prop-elev" step="0.1" value="' + pos.y.toFixed(2) + '"></div>';
   html += '</div>';
 
-  // Actions
+  // ── Actions ───────────────────────────────────────────────────
   html += '<div class="prop-section">';
   html += '<div class="prop-action-row">';
   html += '<button class="prop-btn" id="prop-btn-dup">⊕ Duplicate</button>';
   html += '<button class="prop-btn danger" id="prop-btn-del">✕ Delete</button>';
   html += '</div>';
-  html += '<div class="prop-action-row">';
-  html += '<button class="prop-btn" id="prop-btn-reset-rot">↺ Reset Rotation</button>';
-  html += '</div>';
   html += '</div>';
 
   document.getElementById('properties-body').innerHTML = html;
-
-  // Wire up property events
   wirePropEvents(obj);
 }
+
+function dimInputGroup(label, value, id, step) {
+  return '<div class="prop-input-group dim-input-group">' +
+    '<label>' + label + '</label>' +
+    '<input type="number" class="prop-input dim-input" id="' + id + '" value="' + value + '" step="' + step + '" min="0.001">' +
+    '</div>';
+}
+
 
 function propInputGroup(label, value, id, type, extra) {
   return '<div class="prop-input-group">' +
@@ -866,6 +938,36 @@ function propInputGroup(label, value, id, type, extra) {
 }
 
 function wirePropEvents(obj) {
+  var ud = obj.userData;
+
+  // ── Dimension inputs (resize the object) ──────────────────────
+  function onDimChange() {
+    var ns = ud.naturalSize;
+    if (!ns) return;
+    var wInput = document.getElementById('prop-dim-w');
+    var hInput = document.getElementById('prop-dim-h');
+    var dInput = document.getElementById('prop-dim-d');
+    var wM = parseToMeters(wInput ? wInput.value : null);
+    var hM = parseToMeters(hInput ? hInput.value : null);
+    var dM = parseToMeters(dInput ? dInput.value : null);
+    if (wM !== null && wM > 0) obj.scale.x = wM / ns.x;
+    if (hM !== null && hM > 0) obj.scale.y = hM / ns.y;
+    if (dM !== null && dM > 0) obj.scale.z = dM / ns.z;
+    if (App.bboxHelper) App.bboxHelper.update();
+    updateDimLabels();
+  }
+
+  ['prop-dim-w','prop-dim-h','prop-dim-d'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    // Apply on Enter or blur
+    el.addEventListener('change', onDimChange);
+    el.addEventListener('keydown', function(e) { if (e.key === 'Enter') { onDimChange(); this.blur(); } });
+    // Highlight on focus
+    el.addEventListener('focus', function() { this.select(); });
+  });
+
+  // ── Position ─────────────────────────────────────────────────
   function onPosChange() {
     var x = parseFloat(document.getElementById('prop-pos-x').value) || 0;
     var y = parseFloat(document.getElementById('prop-pos-y').value) || 0;
@@ -874,36 +976,64 @@ function wirePropEvents(obj) {
     updateDimLabels();
   }
 
-  function onRotChange() {
-    var rx = THREE.MathUtils.degToRad(parseFloat(document.getElementById('prop-rot-x').value) || 0);
-    var ry = THREE.MathUtils.degToRad(parseFloat(document.getElementById('prop-rot-y').value) || 0);
-    var rz = THREE.MathUtils.degToRad(parseFloat(document.getElementById('prop-rot-z').value) || 0);
-    obj.rotation.set(rx, ry, rz);
-    updateDimLabels();
-  }
-
-  function onSclChange() {
-    var sx = parseFloat(document.getElementById('prop-scl-x').value) || 1;
-    var sy = parseFloat(document.getElementById('prop-scl-y').value) || 1;
-    var sz = parseFloat(document.getElementById('prop-scl-z').value) || 1;
-    obj.scale.set(sx, sy, sz);
-    if (App.bboxHelper) App.bboxHelper.update();
-    updateDimLabels();
-  }
-
   ['prop-pos-x','prop-pos-y','prop-pos-z'].forEach(function(id) {
     var el = document.getElementById(id);
-    if (el) el.addEventListener('input', onPosChange);
-  });
-  ['prop-rot-x','prop-rot-y','prop-rot-z'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('input', onRotChange);
-  });
-  ['prop-scl-x','prop-scl-y','prop-scl-z'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('input', onSclChange);
+    if (el) { el.addEventListener('input', onPosChange); el.addEventListener('focus', function() { this.select(); }); }
   });
 
+  // ── Rotation ─────────────────────────────────────────────────
+  function setRotFromDeg(rx, ry, rz) {
+    obj.rotation.set(
+      THREE.MathUtils.degToRad(rx),
+      THREE.MathUtils.degToRad(ry),
+      THREE.MathUtils.degToRad(rz)
+    );
+    // Sync slider + display
+    var slider = document.getElementById('rot-y-slider');
+    var display = document.getElementById('rot-y-display');
+    if (slider)  slider.value = ry.toFixed(0);
+    if (display) display.textContent = ry.toFixed(1) + '°';
+    // Sync fine inputs
+    var rix = document.getElementById('prop-rot-x'); if (rix) rix.value = rx.toFixed(1);
+    var riy = document.getElementById('prop-rot-y'); if (riy) riy.value = ry.toFixed(1);
+    var riz = document.getElementById('prop-rot-z'); if (riz) riz.value = rz.toFixed(1);
+    updateDimLabels();
+  }
+
+  // Y-axis slider
+  var rotSlider = document.getElementById('rot-y-slider');
+  if (rotSlider) {
+    rotSlider.addEventListener('input', function() {
+      var ry = parseFloat(this.value);
+      var rx = parseFloat(document.getElementById('prop-rot-x').value) || 0;
+      var rz = parseFloat(document.getElementById('prop-rot-z').value) || 0;
+      setRotFromDeg(rx, ry, rz);
+    });
+  }
+
+  // Quick preset buttons
+  document.querySelectorAll('.rot-preset-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var ry = parseFloat(this.dataset.deg);
+      var rx = parseFloat(document.getElementById('prop-rot-x').value) || 0;
+      var rz = parseFloat(document.getElementById('prop-rot-z').value) || 0;
+      setRotFromDeg(rx, ry, rz);
+    });
+  });
+
+  // Fine X/Y/Z inputs
+  function onRotFineChange() {
+    var rx = parseFloat(document.getElementById('prop-rot-x').value) || 0;
+    var ry = parseFloat(document.getElementById('prop-rot-y').value) || 0;
+    var rz = parseFloat(document.getElementById('prop-rot-z').value) || 0;
+    setRotFromDeg(rx, ry, rz);
+  }
+  ['prop-rot-x','prop-rot-y','prop-rot-z'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) { el.addEventListener('input', onRotFineChange); el.addEventListener('focus', function() { this.select(); }); }
+  });
+
+  // ── Elevation ─────────────────────────────────────────────────
   var elevEl = document.getElementById('prop-elev');
   if (elevEl) elevEl.addEventListener('input', function() {
     obj.position.y = parseFloat(this.value) || 0;
@@ -911,43 +1041,40 @@ function wirePropEvents(obj) {
     updateDimLabels();
   });
 
+  // ── Color ─────────────────────────────────────────────────────
   var colorEl = document.getElementById('prop-color');
   if (colorEl) colorEl.addEventListener('input', function() {
     var hex = this.value;
-    obj.userData.color = hex;
+    ud.color = hex;
     document.getElementById('prop-color-hex').textContent = hex;
     applyColorToObject(obj, hex);
   });
 
+  // ── Opacity ───────────────────────────────────────────────────
   var opEl = document.getElementById('prop-opacity');
   if (opEl) opEl.addEventListener('input', function() {
     var val = parseFloat(this.value);
-    obj.userData.opacity = val;
+    ud.opacity = val;
     document.getElementById('prop-opacity-val').textContent = Math.round(val*100) + '%';
     applyOpacityToObject(obj, val);
   });
 
+  // ── Material presets ──────────────────────────────────────────
   document.querySelectorAll('.mat-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
       document.querySelectorAll('.mat-btn').forEach(function(b) { b.classList.remove('active'); });
       this.classList.add('active');
-      obj.userData.material = this.dataset.mat;
+      ud.material = this.dataset.mat;
       applyMaterialPreset(obj, this.dataset.mat);
     });
   });
 
+  // ── Action buttons ────────────────────────────────────────────
   var delBtn = document.getElementById('prop-btn-del');
   if (delBtn) delBtn.addEventListener('click', deleteSelected);
 
   var dupBtn = document.getElementById('prop-btn-dup');
   if (dupBtn) dupBtn.addEventListener('click', duplicateSelected);
-
-  var resetRotBtn = document.getElementById('prop-btn-reset-rot');
-  if (resetRotBtn) resetRotBtn.addEventListener('click', function() {
-    obj.rotation.set(0, 0, 0);
-    updatePropertiesPanel();
-    updateDimLabels();
-  });
 }
 
 // ── Material & Color application ─────────────────────────────
@@ -1442,12 +1569,18 @@ function setupSidebarToggles() {
   leftBtn.addEventListener('click', toggleLeft);
   rightBtn.addEventListener('click', toggleRight);
 
+  function toggleBoth() { toggleLeft(); toggleRight(); }
+
+  // Header "Panels" button
+  var panelsBtn = document.getElementById('btn-panels');
+  if (panelsBtn) panelsBtn.addEventListener('click', toggleBoth);
+
   // Keyboard shortcut [ and ]
   document.addEventListener('keydown', function(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     if (e.key === '[') toggleLeft();
     if (e.key === ']') toggleRight();
-    if (e.key === '\\') { toggleLeft(); toggleRight(); } // \ = both at once
+    if (e.key === '\\') toggleBoth(); // \ = both at once
   });
 }
 
