@@ -74,6 +74,12 @@
         Snap
       </label>
 
+      <label class="hbtn toggle-btn" id="btn-magnet" title="Toggle Magnetic Snap">
+        <input type="checkbox" id="magnet-toggle" checked>
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M5 3a3 3 0 00-3 3v4a6 6 0 006 6h4a6 6 0 006-6V6a3 3 0 00-3-3h-2a1 1 0 00-1 1v5a1 1 0 01-1 1H9a1 1 0 01-1-1V4a1 1 0 00-1-1H5zM4 6a1 1 0 011-1h1v4a3 3 0 003 3h4a3 3 0 003-3V5h1a1 1 0 011 1v4a4 4 0 01-4 4H8a4 4 0 01-4-4V6z"/></svg>
+        Magnet
+      </label>
+
       <select id="unit-select" class="hselect" title="Unit system">
         <option value="m">m</option>
         <option value="cm">cm</option>
@@ -104,10 +110,15 @@
 
       <div class="hbar-sep"></div>
 
-      <button id="btn-panels" class="hbtn" title="Toggle all panels (\\)">
-        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 4a1 1 0 000 2h14a1 1 0 100-2H3zm0 4a1 1 0 000 2h14a1 1 0 100-2H3zm0 4a1 1 0 000 2h14a1 1 0 100-2H3z" clip-rule="evenodd"/></svg>
-        Panels
+      <button id="btn-toggle-left" class="hbtn active" title="Toggle Toolbox Panel ([)">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+        <span>◀ Toolbox</span>
       </button>
+      <button id="btn-toggle-right" class="hbtn active" title="Toggle Properties Panel (])">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+        <span>Properties ▶</span>
+      </button>
+
     </div>
   </header>
 

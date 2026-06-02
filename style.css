@@ -38,7 +38,7 @@
   --header-h:       52px;
   --footer-h:       28px;
   --sidebar-left-w: 230px;
-  --sidebar-right-w: 260px;
+  --sidebar-right-w: 280px;
 
   --shadow-sm:      0 1px 3px rgba(0,0,0,0.4);
   --shadow:         0 4px 16px rgba(0,0,0,0.5);
@@ -549,6 +549,7 @@ html, body {
 #properties-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px;
 }
 

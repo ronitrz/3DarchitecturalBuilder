@@ -75,6 +75,12 @@ var App = {
 
   // Bounding box helper
   bboxHelper: null,
+
+  // Surface snap toggle
+  surfaceSnap: false,
+
+  // Magnetic snap toggle
+  magnetEnabled: true,
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -134,7 +140,7 @@ function init() {
   // Ghost rotation tip
   var grtip = document.createElement('div');
   grtip.id = 'ghost-rotate-tip';
-  grtip.innerHTML = '<kbd>Q</kbd> rotate left · <kbd>E</kbd> rotate right · <kbd>Scroll</kbd> adjust height';
+  grtip.innerHTML = '<kbd>Q</kbd> rotate left · <kbd>E</kbd> rotate right · <kbd>Scroll</kbd> height · <kbd>Space</kbd> ground level';
   document.getElementById('viewport').appendChild(grtip);
 
   // WASD hint overlay
@@ -361,7 +367,7 @@ function setCameraView(view) {
 // ══════════════════════════════════════════════════════════════
 function setupTransformControls() {
   App.transformControls = new THREE.TransformControls(App.camera, App.renderer.domElement);
-  App.transformControls.setSize(1.4);  // larger handles — easier to grab
+  App.transformControls.setSize(1.4); // larger handles — easier to grab
   App.transformControls.addEventListener('dragging-changed', function(e) {
     App.orbitControls.enabled = !e.value;
   });
@@ -483,6 +489,73 @@ function clearGhost() {
 
 function updateGhostPosition() {
   if (!App.ghostObject) return;
+
+  // Magnetic Snapping
+  if (App.magnetEnabled) {
+    App.raycaster.setFromCamera(App.mouse, App.camera);
+    var targets = App.placedObjects.filter(function(o) { return o.name !== '__ghost__' && o !== App.ghostObject; });
+    var hits = App.raycaster.intersectObjects(targets, true);
+    if (hits.length > 0) {
+      var hitMesh = hits[0].object;
+      var rootObj = hitMesh;
+      while (rootObj.parent && rootObj.parent !== App.scene) {
+        rootObj = rootObj.parent;
+      }
+      if (App.placedObjects.indexOf(rootObj) !== -1) {
+        var boxRoot = new THREE.Box3().setFromObject(rootObj);
+        var sizeRoot = new THREE.Vector3();
+        boxRoot.getSize(sizeRoot);
+        var centerRoot = new THREE.Vector3();
+        boxRoot.getCenter(centerRoot);
+
+        var boxGhost = new THREE.Box3().setFromObject(App.ghostObject);
+        var sizeGhost = new THREE.Vector3();
+        boxGhost.getSize(sizeGhost);
+
+        var localNormal = hits[0].face.normal.clone();
+        var normalMatrix = new THREE.Matrix3().getNormalMatrix(hitMesh.matrixWorld);
+        var worldNormal = localNormal.applyMatrix3(normalMatrix).normalize();
+
+        var absX = Math.abs(worldNormal.x);
+        var absY = Math.abs(worldNormal.y);
+        var absZ = Math.abs(worldNormal.z);
+
+        var snapPos = new THREE.Vector3().copy(rootObj.position);
+
+        if (absY > absX && absY > absZ) {
+          if (worldNormal.y > 0) {
+            snapPos.y = boxRoot.max.y;
+          } else {
+            snapPos.y = Math.max(0, boxRoot.min.y - sizeGhost.y);
+          }
+          var gridSnapped = snapToGrid(hits[0].point);
+          snapPos.x = gridSnapped.x;
+          snapPos.z = gridSnapped.z;
+        } else if (absX > absY && absX > absZ) {
+          if (worldNormal.x > 0) {
+            snapPos.x = rootObj.position.x + (sizeRoot.x + sizeGhost.x) / 2;
+          } else {
+            snapPos.x = rootObj.position.x - (sizeRoot.x + sizeGhost.x) / 2;
+          }
+          snapPos.y = rootObj.position.y;
+          snapPos.z = rootObj.position.z;
+        } else {
+          if (worldNormal.z > 0) {
+            snapPos.z = rootObj.position.z + (sizeRoot.z + sizeGhost.z) / 2;
+          } else {
+            snapPos.z = rootObj.position.z - (sizeRoot.z + sizeGhost.z) / 2;
+          }
+          snapPos.y = rootObj.position.y;
+          snapPos.x = rootObj.position.x;
+        }
+
+        App.ghostObject.position.copy(snapPos);
+        App.ghostObject.rotation.y = _ghostYaw;
+        return;
+      }
+    }
+  }
+
   var pt = getGroundIntersection();
   if (!pt) return;
   var snapped = snapToGrid(pt);
@@ -499,9 +572,21 @@ function placeElement() {
   var elem = ELEM_REGISTRY[App.activeTool];
   if (!elem) return;
 
-  var pt = getGroundIntersection();
-  if (!pt) return;
-  var snapped = snapToGrid(pt);
+  var posX = 0, posY = 0, posZ = 0, rotY = 0;
+  if (App.ghostObject) {
+    posX = App.ghostObject.position.x;
+    posY = App.ghostObject.position.y;
+    posZ = App.ghostObject.position.z;
+    rotY = App.ghostObject.rotation.y;
+  } else {
+    var pt = getGroundIntersection();
+    if (!pt) return;
+    var snapped = snapToGrid(pt);
+    posX = snapped.x;
+    posY = App._ghostHeight || 0;
+    posZ = snapped.z;
+    rotY = _ghostYaw;
+  }
 
   var dims = Object.assign({}, elem.defaultDims);
   var obj = elem.create(dims);
@@ -511,8 +596,8 @@ function placeElement() {
   var _natSize = new THREE.Vector3();
   _tempBox.getSize(_natSize);
 
-  obj.position.set(snapped.x, App._ghostHeight || 0, snapped.z);
-  obj.rotation.y = _ghostYaw;
+  obj.position.set(posX, posY, posZ);
+  obj.rotation.y = rotY;
   obj.userData = {
     elementId:   elem.id,
     elementName: elem.name,
@@ -908,6 +993,9 @@ function updatePropertiesPanel() {
   html += '<div class="prop-section-title">Elevation</div>';
   html += '<div class="prop-row"><label class="prop-label">Floor Y (m)</label>';
   html += '<input type="number" class="prop-input" id="prop-elev" step="0.1" value="' + pos.y.toFixed(2) + '"></div>';
+  html += '<div class="prop-row" style="margin-top:6px;justify-content:flex-end">';
+  html += '<button class="prop-btn" id="prop-btn-drop-ground" style="font-size:11px;padding:5px 8px;display:flex;align-items:center;justify-content:center;gap:4px">⬇️ Place on Ground</button>';
+  html += '</div>';
   html += '</div>';
 
   // ── Actions ───────────────────────────────────────────────────
@@ -1040,6 +1128,25 @@ function wirePropEvents(obj) {
     document.getElementById('prop-pos-y').value = obj.position.y.toFixed(2);
     updateDimLabels();
   });
+
+  var dropGroundBtn = document.getElementById('prop-btn-drop-ground');
+  if (dropGroundBtn) {
+    dropGroundBtn.addEventListener('click', function() {
+      obj.position.y = 0;
+      var elevInput = document.getElementById('prop-elev');
+      if (elevInput) elevInput.value = '0.00';
+      var posyInput = document.getElementById('prop-pos-y');
+      if (posyInput) posyInput.value = '0.00';
+      updateDimLabels();
+      if (App.bboxHelper) App.bboxHelper.update();
+      historyPush({ type: 'transform', obj: obj,
+        pos: obj.position.clone(),
+        rot: obj.rotation.clone(),
+        scl: obj.scale.clone()
+      });
+      showToast('Placed element on ground level', 'success');
+    });
+  }
 
   // ── Color ─────────────────────────────────────────────────────
   var colorEl = document.getElementById('prop-color');
@@ -1224,6 +1331,18 @@ function buildHeaderEvents() {
   }
   snapToggle.addEventListener('change', updateSnapToggle);
   updateSnapToggle();
+
+  // Magnet snapping toggle
+  var magnetToggle = document.getElementById('magnet-toggle');
+  var magnetBtn = document.getElementById('btn-magnet');
+  function updateMagnetToggle() {
+    App.magnetEnabled = magnetToggle.checked;
+    magnetBtn.classList.toggle('active', App.magnetEnabled);
+  }
+  if (magnetToggle && magnetBtn) {
+    magnetToggle.addEventListener('change', updateMagnetToggle);
+    updateMagnetToggle();
+  }
 
   // Unit select
   document.getElementById('unit-select').addEventListener('change', function() {
@@ -1551,11 +1670,17 @@ function setupSidebarToggles() {
   var leftIcon     = document.getElementById('toggle-left-icon');
   var rightIcon    = document.getElementById('toggle-right-icon');
 
+  var hdrLeftBtn   = document.getElementById('btn-toggle-left');
+  var hdrRightBtn  = document.getElementById('btn-toggle-right');
+
   function toggleLeft() {
     var collapsed = leftSidebar.classList.toggle('collapsed');
     leftIcon.textContent  = collapsed ? '▶' : '◀';
     leftBtn.title = collapsed ? 'Show panel ([)' : 'Hide panel ([)';
-    // Give renderer a frame to see new size
+    if (hdrLeftBtn) {
+      hdrLeftBtn.classList.toggle('active', !collapsed);
+      hdrLeftBtn.querySelector('span').textContent = collapsed ? '▶ Toolbox' : '◀ Toolbox';
+    }
     setTimeout(resize, 300);
   }
 
@@ -1563,17 +1688,20 @@ function setupSidebarToggles() {
     var collapsed = rightSidebar.classList.toggle('collapsed');
     rightIcon.textContent  = collapsed ? '◀' : '▶';
     rightBtn.title = collapsed ? 'Show panel (])' : 'Hide panel (])';
+    if (hdrRightBtn) {
+      hdrRightBtn.classList.toggle('active', !collapsed);
+      hdrRightBtn.querySelector('span').textContent = collapsed ? 'Properties ◀' : 'Properties ▶';
+    }
     setTimeout(resize, 300);
   }
 
   leftBtn.addEventListener('click', toggleLeft);
   rightBtn.addEventListener('click', toggleRight);
 
-  function toggleBoth() { toggleLeft(); toggleRight(); }
+  if (hdrLeftBtn) hdrLeftBtn.addEventListener('click', toggleLeft);
+  if (hdrRightBtn) hdrRightBtn.addEventListener('click', toggleRight);
 
-  // Header "Panels" button
-  var panelsBtn = document.getElementById('btn-panels');
-  if (panelsBtn) panelsBtn.addEventListener('click', toggleBoth);
+  function toggleBoth() { toggleLeft(); toggleRight(); }
 
   // Keyboard shortcut [ and ]
   document.addEventListener('keydown', function(e) {
@@ -1634,6 +1762,13 @@ function setupKeyboard() {
       if (key === 'e' || key === 'E') {
         _ghostYaw -= Math.PI / 12;
         if (App.ghostObject) App.ghostObject.rotation.y = _ghostYaw;
+        return;
+      }
+      if (key === ' ' || key === 'spacebar') {
+        e.preventDefault();
+        App._ghostHeight = 0;
+        if (App.ghostObject) App.ghostObject.position.y = 0;
+        showToast('Reset placement height to ground level', 'success');
         return;
       }
       if (key === 'Escape') { setSelectMode(); return; }
