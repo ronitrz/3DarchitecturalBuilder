@@ -81,6 +81,17 @@ var App = {
 
   // Magnetic snap toggle
   magnetEnabled: true,
+
+  // Advanced Measure Tool State
+  measurements: [],            // Array of persistent measurements
+  selectedMeasurement: null,   // Currently selected measurement
+  draggedHandle: null,         // Dragged handle mesh
+  draggedMeasurement: null,    // Measurement object of the dragged handle
+  pendingMeasureStart: null,   // First click point of a new measurement
+  measureColor: '#ffcc00',     // Default color for new measurements
+  measureSnapPoint: null,      // Current calculated snap Vector3
+  measureSnapIndicator: null,  // Snapping indicator mesh
+  lastHoverPt: null,           // Last calculated hover/mouse point in measure mode
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -153,6 +164,14 @@ function init() {
     '<kbd>Shift</kbd> Sprint &nbsp; <kbd>F</kbd> Focus<br>' +
     '<span style="color:var(--text-muted);font-size:9px">Hold keys to fly camera</span>';
   document.getElementById('viewport').appendChild(hint);
+
+  // Initialize measurement snap indicator
+  var snapGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+  var snapMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false, transparent: true, opacity: 0.8 });
+  App.measureSnapIndicator = new THREE.Mesh(snapGeo, snapMat);
+  App.measureSnapIndicator.renderOrder = 1000;
+  App.measureSnapIndicator.visible = false;
+  App.scene.add(App.measureSnapIndicator);
 
   animate();
   showToast('Welcome to 3DArch Studio! 🏗️ Select a tool to start building.', 'success', 4000);
@@ -769,44 +788,299 @@ function snapObjectToGrid(obj) {
   obj.position.z = Math.round(obj.position.z / App.snapSize) * App.snapSize;
 }
 
+// Calculate standard raycast point with magnetic snap-to-corner logic
+function getMeasureSnapPoint(mousePt) {
+  var raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mousePt, App.camera);
+  
+  // Exclude ghost and bbox helpers
+  var targets = App.placedObjects.filter(function(o) {
+    return o.name !== '__ghost__' && o.name !== '__bbox__' && o.name !== '__ground__';
+  });
+  
+  var hits = raycaster.intersectObjects(targets, true);
+  var snapPt = null;
+  
+  if (hits.length > 0) {
+    var hitPt = hits[0].point;
+    var hitObj = hits[0].object;
+    
+    // Find top-level parent object
+    var rootObj = hitObj;
+    while (rootObj.parent && rootObj.parent !== App.scene) {
+      rootObj = rootObj.parent;
+    }
+    
+    // Get corners and centers of bounding box
+    var box = new THREE.Box3().setFromObject(rootObj);
+    var min = box.min;
+    var max = box.max;
+    
+    var candidates = [
+      // 8 corners
+      new THREE.Vector3(min.x, min.y, min.z),
+      new THREE.Vector3(min.x, min.y, max.z),
+      new THREE.Vector3(min.x, max.y, min.z),
+      new THREE.Vector3(min.x, max.y, max.z),
+      new THREE.Vector3(max.x, min.y, min.z),
+      new THREE.Vector3(max.x, min.y, max.z),
+      new THREE.Vector3(max.x, max.y, min.z),
+      new THREE.Vector3(max.x, max.y, max.z),
+    ];
+    
+    // 6 face centers
+    var center = new THREE.Vector3();
+    box.getCenter(center);
+    candidates.push(new THREE.Vector3(center.x, min.y, center.z));
+    candidates.push(new THREE.Vector3(center.x, max.y, center.z));
+    candidates.push(new THREE.Vector3(min.x, center.y, center.z));
+    candidates.push(new THREE.Vector3(max.x, center.y, center.z));
+    candidates.push(new THREE.Vector3(center.x, center.y, min.z));
+    candidates.push(new THREE.Vector3(center.x, center.y, max.z));
+    
+    // Find closest snap candidate
+    var closestDist = Infinity;
+    var closestPt = null;
+    candidates.forEach(function(c) {
+      var d = hitPt.distanceTo(c);
+      if (d < closestDist) {
+        closestDist = d;
+        closestPt = c;
+      }
+    });
+    
+    // Snap threshold: 0.6 meters in 3D world space
+    if (closestDist < 0.6 && closestPt) {
+      snapPt = closestPt.clone();
+      if (App.measureSnapIndicator) {
+        App.measureSnapIndicator.position.copy(snapPt);
+        App.measureSnapIndicator.visible = true;
+      }
+    } else {
+      snapPt = hitPt.clone();
+      if (App.measureSnapIndicator) {
+        App.measureSnapIndicator.visible = false;
+      }
+    }
+  } else {
+    // Fallback to ground intersection
+    var target = new THREE.Vector3();
+    var intersects = raycaster.ray.intersectPlane(App.groundPlane, target);
+    if (intersects) {
+      snapPt = target;
+      // Grid snap if enabled
+      if (App.snapEnabled) {
+        snapPt = snapToGrid(snapPt);
+      }
+    }
+    if (App.measureSnapIndicator) {
+      App.measureSnapIndicator.visible = false;
+    }
+  }
+  
+  return snapPt;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MEASURE TOOL
+// ══════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════
 //  MEASURE TOOL
 // ══════════════════════════════════════════════════════════════
 function startMeasure() {
-  App.measurePoints = [];
-  if (App.measureLine) { App.scene.remove(App.measureLine); App.measureLine = null; }
-  updateMeasurePanel(null);
+  App.pendingMeasureStart = null;
+  deselectMeasurement();
+  clearTempMeasureLine();
+  updateMeasurementsVisibility();
+  updateMeasurePanel();
 }
 
-function addMeasurePoint(pt) {
-  App.measurePoints.push(pt.clone());
-  if (App.measurePoints.length === 2) {
-    var dist = App.measurePoints[0].distanceTo(App.measurePoints[1]);
-    // Draw line
-    var geo = new THREE.BufferGeometry().setFromPoints(App.measurePoints);
-    var mat = new THREE.LineBasicMaterial({ color: 0xffcc00, linewidth: 2 });
-    if (App.measureLine) App.scene.remove(App.measureLine);
-    App.measureLine = new THREE.Line(geo, mat);
-    App.measureLine.position.y = 0.01;
-    App.scene.add(App.measureLine);
+function createHandleMesh(pos, color) {
+  var geo = new THREE.SphereGeometry(0.12, 16, 16);
+  var mat = new THREE.MeshBasicMaterial({
+    color: color || 0xffcc00,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.8
+  });
+  var mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(pos);
+  mesh.renderOrder = 999;
+  mesh.visible = (App.activeMode === 'measure');
+  App.scene.add(mesh);
+  return mesh;
+}
 
-    updateMeasurePanel(dist);
-    App.measurePoints = [];
-    showToast('Distance: ' + formatDim(dist), 'success');
+function createLabelEl(color) {
+  var el = document.createElement('div');
+  el.className = 'measure-label';
+  el.style.borderColor = color;
+  document.getElementById('dim-labels').appendChild(el);
+  return el;
+}
+
+function createMeasurement(p1, p2, color) {
+  color = color || App.measureColor || '#ffcc00';
+  
+  // Create line
+  var points = [p1.clone(), p2.clone()];
+  var geo = new THREE.BufferGeometry().setFromPoints(points);
+  var mat = new THREE.LineBasicMaterial({
+    color: color,
+    linewidth: 3,
+    depthTest: false,
+  });
+  var lineMesh = new THREE.Line(geo, mat);
+  lineMesh.renderOrder = 998;
+  App.scene.add(lineMesh);
+  
+  // Create handles
+  var startHandle = createHandleMesh(p1, color);
+  var endHandle = createHandleMesh(p2, color);
+  
+  // Create HTML label
+  var labelEl = createLabelEl(color);
+  
+  var m = {
+    id: 'measure_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    points: points,
+    lineMesh: lineMesh,
+    startHandle: startHandle,
+    endHandle: endHandle,
+    labelEl: labelEl,
+    color: color
+  };
+  
+  // User data links for selection / dragging
+  startHandle.userData = { isHandle: true, pointIndex: 0, measurement: m };
+  endHandle.userData = { isHandle: true, pointIndex: 1, measurement: m };
+  lineMesh.userData = { isLine: true, measurement: m };
+  
+  App.measurements.push(m);
+  selectMeasurement(m);
+  return m;
+}
+
+function selectMeasurement(m) {
+  deselectObject();
+  deselectMeasurement();
+  
+  App.selectedMeasurement = m;
+  if (m.labelEl) {
+    m.labelEl.classList.add('selected');
+  }
+  if (m.startHandle) m.startHandle.scale.set(1.4, 1.4, 1.4);
+  if (m.endHandle) m.endHandle.scale.set(1.4, 1.4, 1.4);
+  
+  updatePropertiesPanel();
+}
+
+function deselectMeasurement() {
+  if (App.selectedMeasurement) {
+    var m = App.selectedMeasurement;
+    if (m.labelEl) {
+      m.labelEl.classList.remove('selected');
+    }
+    if (m.startHandle) m.startHandle.scale.set(1, 1, 1);
+    if (m.endHandle) m.endHandle.scale.set(1, 1, 1);
+    App.selectedMeasurement = null;
   }
 }
 
-function updateMeasurePanel(dist) {
+function deleteMeasurement(m) {
+  if (!m) return;
+  if (m.lineMesh) App.scene.remove(m.lineMesh);
+  if (m.startHandle) App.scene.remove(m.startHandle);
+  if (m.endHandle) App.scene.remove(m.endHandle);
+  if (m.labelEl && m.labelEl.parentNode) {
+    m.labelEl.parentNode.removeChild(m.labelEl);
+  }
+  App.measurements = App.measurements.filter(function(x) { return x !== m; });
+  if (App.selectedMeasurement === m) {
+    App.selectedMeasurement = null;
+    showNoSelection();
+  }
+  showToast('Deleted measurement', '');
+}
+
+function clearAllMeasurements() {
+  var list = App.measurements.slice();
+  list.forEach(function(m) {
+    deleteMeasurement(m);
+  });
+  App.measurements = [];
+  App.selectedMeasurement = null;
+  App.pendingMeasureStart = null;
+  clearTempMeasureLine();
+}
+
+function updateMeasurementsVisibility() {
+  var isMeasureMode = (App.activeMode === 'measure');
+  App.measurements.forEach(function(m) {
+    if (m.startHandle) m.startHandle.visible = isMeasureMode;
+    if (m.endHandle) m.endHandle.visible = isMeasureMode;
+    if (m.labelEl) {
+      m.labelEl.style.display = 'block';
+    }
+  });
+  if (!isMeasureMode && App.measureSnapIndicator) {
+    App.measureSnapIndicator.visible = false;
+  }
+  if (!isMeasureMode) {
+    App.pendingMeasureStart = null;
+    clearTempMeasureLine();
+  }
+}
+
+function updateTempMeasureLine(endPt) {
+  if (!App.pendingMeasureStart) return;
+  var color = App.measureColor || '#ffcc00';
+  var points = [App.pendingMeasureStart, endPt];
+  
+  if (!App._tempMeasureLineMesh) {
+    var geo = new THREE.BufferGeometry().setFromPoints(points);
+    var mat = new THREE.LineBasicMaterial({
+      color: color,
+      linewidth: 2,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.6
+    });
+    App._tempMeasureLineMesh = new THREE.Line(geo, mat);
+    App._tempMeasureLineMesh.renderOrder = 998;
+    App.scene.add(App._tempMeasureLineMesh);
+  } else {
+    App._tempMeasureLineMesh.geometry.setFromPoints(points);
+    App._tempMeasureLineMesh.material.color.set(color);
+  }
+}
+
+function clearTempMeasureLine() {
+  if (App._tempMeasureLineMesh) {
+    App.scene.remove(App._tempMeasureLineMesh);
+    App._tempMeasureLineMesh = null;
+  }
+}
+
+function updateMeasurePanel() {
+  if (App.selectedMeasurement) {
+    showMeasurementProperties();
+    return;
+  }
+  
   var body = document.getElementById('properties-body');
   var html = '<div class="measure-panel">';
   html += '<div class="prop-section-title">Measure Tool</div>';
-  if (dist !== null) {
-    html += '<div class="measure-result">';
-    html += '<div class="dist-value">' + formatDim(dist) + '</div>';
-    html += '<div class="dist-label">Distance</div></div>';
-    html += '<p style="font-size:11px;color:var(--text-muted);text-align:center;padding:8px">Click two points to measure again</p>';
+  if (App.pendingMeasureStart) {
+    html += '<div class="measure-result" style="border-style:dashed">';
+    html += '<div class="dist-value" style="font-size:20px;opacity:0.6">Click End Point</div>';
+    html += '<div class="dist-label">Pending...</div></div>';
+    html += '<p style="font-size:11px;color:var(--text-muted);text-align:center;padding:8px">Click in space or on elements to set second point</p>';
   } else {
-    html += '<p style="font-size:12px;color:var(--text-secondary);text-align:center;padding:16px">Click the first point in the scene</p>';
+    html += '<div class="measure-result" style="border-style:dashed">';
+    html += '<div class="dist-value" style="font-size:20px;opacity:0.6">Start Measurement</div>';
+    html += '<div class="dist-label">Ready</div></div>';
+    html += '<p style="font-size:11px;color:var(--text-secondary);text-align:center;padding:12px">Click anywhere in the scene to place the first point</p>';
   }
   html += '</div>';
   body.innerHTML = html;
@@ -854,6 +1128,69 @@ function setDimLabel(id, text, worldPos) {
 function hideDimLabels() {
   ['dim-w','dim-h','dim-d'].forEach(function(id) {
     document.getElementById(id).style.display = 'none';
+  });
+}
+
+function updateMeasurementLabels() {
+  var canvas = App.renderer.domElement;
+  var rect = canvas.getBoundingClientRect();
+
+  // Temporary/pending line label
+  var tempLabel = document.getElementById('temp-measure-label');
+  if (App.activeMode === 'measure' && App.pendingMeasureStart && App.lastHoverPt) {
+    if (!tempLabel) {
+      tempLabel = document.createElement('div');
+      tempLabel.id = 'temp-measure-label';
+      tempLabel.className = 'measure-label';
+      document.getElementById('dim-labels').appendChild(tempLabel);
+    }
+    
+    var start = App.pendingMeasureStart;
+    var end = App.lastHoverPt;
+    var dist = start.distanceTo(end);
+    var center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    center.y += 0.25;
+    
+    var vec = center.clone().project(App.camera);
+    if (vec.z > 1) {
+      tempLabel.style.display = 'none';
+    } else {
+      var x = (vec.x * 0.5 + 0.5) * rect.width  + rect.left;
+      var y = (-(vec.y * 0.5) + 0.5) * rect.height + rect.top;
+      tempLabel.style.display = 'block';
+      tempLabel.style.left = (x - rect.left) + 'px';
+      tempLabel.style.top  = (y - rect.top) + 'px';
+      tempLabel.textContent = formatDim(dist);
+      tempLabel.style.borderColor = App.measureColor || '#ffcc00';
+    }
+  } else {
+    if (tempLabel) {
+      tempLabel.parentNode.removeChild(tempLabel);
+    }
+  }
+
+  // Permanent measurement labels
+  App.measurements.forEach(function(m) {
+    var label = m.labelEl;
+    if (!label) return;
+
+    var start = m.points[0];
+    var end = m.points[1];
+    var dist = start.distanceTo(end);
+    var center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    center.y += 0.25;
+
+    var vec = center.clone().project(App.camera);
+    if (vec.z > 1) {
+      label.style.display = 'none';
+    } else {
+      var x = (vec.x * 0.5 + 0.5) * rect.width  + rect.left;
+      var y = (-(vec.y * 0.5) + 0.5) * rect.height + rect.top;
+      label.style.display = 'block';
+      label.style.left = (x - rect.left) + 'px';
+      label.style.top  = (y - rect.top) + 'px';
+      label.textContent = formatDim(dist);
+    }
   });
 }
 
@@ -912,7 +1249,76 @@ function dimStep() {
   }
 }
 
+function showMeasurementProperties() {
+  var m = App.selectedMeasurement;
+  if (!m) return;
+  
+  var dist = m.points[0].distanceTo(m.points[1]);
+  var body = document.getElementById('properties-body');
+  
+  var html = '<div class="measure-panel">';
+  html += '<div style="padding:10px 8px 4px; flex-shrink: 0; min-width: 120px;">';
+  html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary)">Selected Measurement</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted)">Interactive CAD Measure Line</div>';
+  html += '</div>';
+
+  // Distance display
+  html += '<div class="measure-result">';
+  html += '<div class="dist-value">' + formatDim(dist) + '</div>';
+  html += '<div class="dist-label">Distance</div></div>';
+
+  // Color selection
+  html += '<div class="prop-section">';
+  html += '<div class="prop-section-title">Appearance</div>';
+  html += '<div class="prop-color-wrap">';
+  html += '<label class="prop-label">Line Color</label>';
+  html += '<label class="prop-color-swatch"><input type="color" id="measure-color" value="' + m.color + '"></label>';
+  html += '<span id="measure-color-hex" style="font-size:11px;color:var(--text-muted)">' + m.color + '</span>';
+  html += '</div></div>';
+
+  // Actions
+  html += '<div class="prop-section">';
+  html += '<button class="prop-btn danger" id="btn-delete-measure" style="width:100%">✕ Delete Measurement</button>';
+  html += '</div>';
+  
+  html += '</div>';
+  
+  body.innerHTML = html;
+  
+  // Wire events
+  var colorInput = document.getElementById('measure-color');
+  if (colorInput) {
+    colorInput.addEventListener('input', function() {
+      var hex = this.value;
+      m.color = hex;
+      document.getElementById('measure-color-hex').textContent = hex;
+      
+      // Update three.js meshes colors
+      m.lineMesh.material.color.set(hex);
+      m.startHandle.material.color.set(hex);
+      m.endHandle.material.color.set(hex);
+      
+      // Update HTML label border
+      if (m.labelEl) {
+        m.labelEl.style.borderColor = hex;
+      }
+    });
+  }
+  
+  var delBtn = document.getElementById('btn-delete-measure');
+  if (delBtn) {
+    delBtn.addEventListener('click', function() {
+      deleteMeasurement(m);
+    });
+  }
+}
+
 function updatePropertiesPanel() {
+  if (App.activeMode === 'measure' && App.selectedMeasurement) {
+    showMeasurementProperties();
+    return;
+  }
+
   var obj = App.selectedObject;
   if (!obj) { showNoSelection(); return; }
 
@@ -1656,19 +2062,102 @@ function onMouseMove(e) {
 
   // Update bbox
   if (App.bboxHelper) App.bboxHelper.update();
+
+  // Advanced measure tool drag/hover/snapping handling
+  if (App.activeMode === 'measure') {
+    var raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(App.mouse, App.camera);
+    
+    if (App.draggedHandle) {
+      // Dragging a handle
+      var snapPt = getMeasureSnapPoint(App.mouse);
+      if (snapPt) {
+        App.draggedHandle.position.copy(snapPt);
+        var m = App.draggedMeasurement;
+        var idx = App.draggedHandle.userData.pointIndex;
+        m.points[idx].copy(snapPt);
+        m.lineMesh.geometry.setFromPoints(m.points);
+        m.lineMesh.geometry.computeBoundingBox();
+        m.lineMesh.geometry.computeBoundingSphere();
+        
+        if (App.selectedMeasurement === m) {
+          updatePropertiesPanel();
+        }
+      }
+    } else {
+      // Hover handle detection
+      var handles = [];
+      App.measurements.forEach(function(m) {
+        if (m.startHandle) handles.push(m.startHandle);
+        if (m.endHandle) handles.push(m.endHandle);
+      });
+      var hits = raycaster.intersectObjects(handles);
+      var canvas = document.getElementById('three-canvas');
+      if (hits.length > 0) {
+        canvas.style.cursor = 'pointer';
+        handles.forEach(function(h) {
+          if (h === hits[0].object || (App.selectedMeasurement && (h === App.selectedMeasurement.startHandle || h === App.selectedMeasurement.endHandle))) {
+            h.scale.set(1.4, 1.4, 1.4);
+          } else {
+            h.scale.set(1.0, 1.0, 1.0);
+          }
+        });
+      } else {
+        canvas.style.cursor = '';
+        handles.forEach(function(h) {
+          var isSel = App.selectedMeasurement && (h === App.selectedMeasurement.startHandle || h === App.selectedMeasurement.endHandle);
+          h.scale.set(isSel ? 1.4 : 1.0, isSel ? 1.4 : 1.0, isSel ? 1.4 : 1.0);
+        });
+      }
+      
+      // Calculate snap point for hover feedback
+      var snapPt = getMeasureSnapPoint(App.mouse);
+      App.lastHoverPt = snapPt;
+      if (App.pendingMeasureStart && snapPt) {
+        updateTempMeasureLine(snapPt);
+      }
+    }
+  }
 }
 
 function onMouseDown(e) {
   if (e.button !== 0) return; // Only left click
   App.isMouseDown = true;
   App.mouseDownPos = { x: e.clientX, y: e.clientY };
+
+  if (App.activeMode === 'measure') {
+    var raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(App.mouse, App.camera);
+    var handles = [];
+    App.measurements.forEach(function(m) {
+      if (m.startHandle) handles.push(m.startHandle);
+      if (m.endHandle) handles.push(m.endHandle);
+    });
+    var hits = raycaster.intersectObjects(handles);
+    if (hits.length > 0) {
+      // Start dragging handle
+      var hitHandle = hits[0].object;
+      App.draggedHandle = hitHandle;
+      App.draggedMeasurement = hitHandle.userData.measurement;
+      App.orbitControls.enabled = false;
+      selectMeasurement(App.draggedMeasurement);
+    }
+  }
 }
 
 function onMouseUp(e) {
   if (e.button !== 0) return;
   App.isMouseDown = false;
 
-  // Check for drag (orbit) vs click
+  // Handle measurement drag release
+  if (App.activeMode === 'measure' && App.draggedHandle) {
+    App.draggedHandle = null;
+    App.draggedMeasurement = null;
+    App.orbitControls.enabled = true;
+    return;
+  }
+
+  // Check for drag vs click
   var dx = e.clientX - (App.mouseDownPos ? App.mouseDownPos.x : e.clientX);
   var dy = e.clientY - (App.mouseDownPos ? App.mouseDownPos.y : e.clientY);
   var dist = Math.sqrt(dx*dx + dy*dy);
@@ -1680,8 +2169,38 @@ function onMouseUp(e) {
   }
 
   if (App.activeMode === 'measure') {
-    var pt = getGroundIntersection();
-    if (pt) addMeasurePoint(pt);
+    var raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(App.mouse, App.camera);
+    
+    // Check if clicked a measurement line to select it
+    var lines = App.measurements.map(function(m) { return m.lineMesh; });
+    var hits = raycaster.intersectObjects(lines);
+    if (hits.length > 0) {
+      var hitLine = hits[0].object;
+      selectMeasurement(hitLine.userData.measurement);
+      return;
+    }
+    
+    // Clicked empty space or on elements (placing measurement points)
+    var snapPt = getMeasureSnapPoint(App.mouse);
+    if (snapPt) {
+      if (App.pendingMeasureStart) {
+        // Complete the line
+        createMeasurement(App.pendingMeasureStart, snapPt);
+        App.pendingMeasureStart = null;
+        clearTempMeasureLine();
+        updateMeasurePanel();
+      } else {
+        // Start the line
+        App.pendingMeasureStart = snapPt.clone();
+        updateMeasurePanel();
+      }
+    } else {
+      if (!App.pendingMeasureStart) {
+        deselectMeasurement();
+        updatePropertiesPanel();
+      }
+    }
     return;
   }
 
@@ -1901,7 +2420,11 @@ function setupKeyboard() {
         break;
       case 'Delete':
       case 'Backspace':
-        deleteSelected();
+        if (App.activeMode === 'measure' && App.selectedMeasurement) {
+          deleteMeasurement(App.selectedMeasurement);
+        } else {
+          deleteSelected();
+        }
         break;
       // Transform modes
       case 'g': case 'G':
@@ -1970,7 +2493,7 @@ function clearScene() {
   App.placedObjects = [];
   App.history = [];
   App.historyIndex = -1;
-  if (App.measureLine) { App.scene.remove(App.measureLine); App.measureLine = null; }
+  clearAllMeasurements();
   updateStatusBar();
   showNoSelection();
   showToast('Scene cleared', '');
@@ -2141,6 +2664,9 @@ function animate() {
   if (App.selectedObject) {
     updateDimLabels();
   }
+
+  // Update measurement labels in real-time
+  updateMeasurementLabels();
 }
 
 // ══════════════════════════════════════════════════════════════

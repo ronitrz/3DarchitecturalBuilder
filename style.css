@@ -1304,3 +1304,30 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   grid-template-columns: repeat(5, 1fr);
   gap: 3px;
 }
+
+/* ──────────────────────────────────────
+   MEASURE LABELS & SNAP INDICATORS
+   ────────────────────────────────────── */
+.measure-label {
+  position: absolute;
+  background: rgba(13, 17, 23, 0.85);
+  border: 1.5px solid var(--border);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+  font-variant-numeric: tabular-nums;
+  z-index: 10;
+  backdrop-filter: blur(4px);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.measure-label.selected {
+  border-color: #ffaa00 !important;
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.4), 0 3px 8px rgba(0,0,0,0.6);
+}
