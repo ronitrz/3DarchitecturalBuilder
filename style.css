@@ -569,7 +569,7 @@ html, body {
 
 /* Properties sections */
 .prop-section {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .prop-section-title {
@@ -578,16 +578,16 @@ html, body {
   letter-spacing: 0.8px;
   text-transform: uppercase;
   color: var(--text-muted);
-  padding: 6px 6px 4px;
+  padding: 4px 6px 3px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .prop-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 4px;
+  padding: 2px 4px;
   border-radius: var(--radius-sm);
   transition: background var(--transition);
 }
@@ -1168,4 +1168,122 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   color: var(--accent-bright);
   font-family: var(--font);
   margin: 0 1px;
+}
+
+/* ──────────────────────────────────────
+   VIEWPORT WRAPPER & DOCKING LAYOUT
+   ────────────────────────────────────── */
+#viewport-wrapper {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  overflow: hidden;
+  position: relative;
+}
+
+#viewport-wrapper.bottom-docked {
+  flex-direction: column;
+}
+
+/* Properties Header Dock Toggle Button */
+.prop-hdr-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+}
+
+.prop-hdr-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background: var(--bg-hover);
+}
+
+.prop-hdr-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+/* Bottom docked sidebar styling */
+#viewport-wrapper.bottom-docked #sidebar-right {
+  width: 100%;
+  height: 165px;
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+#viewport-wrapper.bottom-docked #sidebar-right.collapsed {
+  height: 0;
+  border-top-color: transparent;
+}
+
+/* Reposition toggle button for bottom-docked */
+#viewport-wrapper.bottom-docked .sidebar-toggle-right {
+  left: 50%;
+  top: -20px;
+  transform: translateX(-50%) translateY(0) rotate(90deg);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom: none;
+}
+
+/* Horizontal scrolling layout in bottom mode */
+#viewport-wrapper.bottom-docked #properties-body {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px 12px;
+}
+
+#viewport-wrapper.bottom-docked #properties-body #no-selection {
+  flex: 1;
+  padding: 10px;
+  gap: 4px;
+}
+
+#viewport-wrapper.bottom-docked #properties-body #no-selection .no-sel-icon {
+  font-size: 24px;
+  margin-bottom: 2px;
+}
+
+#viewport-wrapper.bottom-docked .prop-section {
+  margin-bottom: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 180px;
+  border-right: 1px solid var(--border);
+  padding-right: 16px;
+}
+
+#viewport-wrapper.bottom-docked .prop-section:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+
+#viewport-wrapper.bottom-docked .prop-section-title {
+  margin-bottom: 6px;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+#viewport-wrapper.bottom-docked .prop-row {
+  padding: 2px 4px;
+}
+
+/* Make material grid horizontal/shorter in bottom mode */
+#viewport-wrapper.bottom-docked .prop-mat-grid {
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
 }

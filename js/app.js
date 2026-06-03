@@ -387,6 +387,18 @@ function setupTransformControls() {
     }
   });
   App.scene.add(App.transformControls);
+  updateTransformControlsSnap();
+}
+
+function updateTransformControlsSnap() {
+  if (!App.transformControls) return;
+  if (App.snapEnabled) {
+    App.transformControls.setTranslationSnap(App.snapSize);
+    App.transformControls.setRotationSnap(THREE.MathUtils.degToRad(15));
+  } else {
+    App.transformControls.setTranslationSnap(null);
+    App.transformControls.setRotationSnap(null);
+  }
 }
 
 function setTransformMode(mode) {
@@ -522,7 +534,20 @@ function updateGhostPosition() {
 
         var snapPos = new THREE.Vector3().copy(rootObj.position);
 
-        if (absY > absX && absY > absZ) {
+        // Check if current ghost is a roof, ceiling, slab, or beam
+        var isRoofOrCeiling = false;
+        var activeElem = ELEM_REGISTRY[App.activeTool];
+        if (activeElem) {
+          isRoofOrCeiling = (activeElem.category === 'Roofing' || activeElem.id === 'ceiling' || activeElem.id === 'floor-slab' || activeElem.id === 'beam');
+        }
+
+        if (isRoofOrCeiling) {
+          // Force snap Y to the top of the root element
+          snapPos.y = boxRoot.max.y;
+          var gridSnapped = snapToGrid(hits[0].point);
+          snapPos.x = gridSnapped.x;
+          snapPos.z = gridSnapped.z;
+        } else if (absY > absX && absY > absZ) {
           if (worldNormal.y > 0) {
             snapPos.y = boxRoot.max.y;
           } else {
@@ -951,6 +976,12 @@ function updatePropertiesPanel() {
   });
   html += '</div>';
 
+  // Snap/Align helper buttons
+  html += '<div class="rot-helpers" style="display:flex;gap:4px;margin-top:4px">';
+  html += '<button class="prop-btn" id="prop-btn-snap-y" title="Snap turn (Y) to nearest 90°" style="font-size:10px;padding:4px 6px">Snap 90°</button>';
+  html += '<button class="prop-btn" id="prop-btn-reset-tilt" title="Make upright (X & Z to 0°)" style="font-size:10px;padding:4px 6px">Reset Tilt</button>';
+  html += '</div>';
+
   // Fine-tune X / Y / Z inputs
   html += '<div class="rot-fine-wrap">';
   html += '<div class="prop-3col" style="padding:0;margin-top:4px">';
@@ -1106,8 +1137,46 @@ function wirePropEvents(obj) {
       var rx = parseFloat(document.getElementById('prop-rot-x').value) || 0;
       var rz = parseFloat(document.getElementById('prop-rot-z').value) || 0;
       setRotFromDeg(rx, ry, rz);
+      historyPush({ type: 'transform', obj: obj,
+        pos: obj.position.clone(),
+        rot: obj.rotation.clone(),
+        scl: obj.scale.clone()
+      });
     });
   });
+
+  // Snap Y to nearest 90
+  var snapYBtn = document.getElementById('prop-btn-snap-y');
+  if (snapYBtn) {
+    snapYBtn.addEventListener('click', function() {
+      var ry = THREE.MathUtils.radToDeg(obj.rotation.y);
+      var snappedRy = Math.round(ry / 90) * 90;
+      var rx = THREE.MathUtils.radToDeg(obj.rotation.x);
+      var rz = THREE.MathUtils.radToDeg(obj.rotation.z);
+      setRotFromDeg(rx, snappedRy, rz);
+      historyPush({ type: 'transform', obj: obj,
+        pos: obj.position.clone(),
+        rot: obj.rotation.clone(),
+        scl: obj.scale.clone()
+      });
+      showToast('Snapped rotation to ' + snappedRy + '°', 'success');
+    });
+  }
+
+  // Reset X/Z tilt
+  var resetTiltBtn = document.getElementById('prop-btn-reset-tilt');
+  if (resetTiltBtn) {
+    resetTiltBtn.addEventListener('click', function() {
+      var ry = THREE.MathUtils.radToDeg(obj.rotation.y);
+      setRotFromDeg(0, ry, 0);
+      historyPush({ type: 'transform', obj: obj,
+        pos: obj.position.clone(),
+        rot: obj.rotation.clone(),
+        scl: obj.scale.clone()
+      });
+      showToast('Reset tilt (upright)', 'success');
+    });
+  }
 
   // Fine X/Y/Z inputs
   function onRotFineChange() {
@@ -1328,6 +1397,7 @@ function buildHeaderEvents() {
   function updateSnapToggle() {
     App.snapEnabled = snapToggle.checked;
     snapBtn.classList.toggle('active', App.snapEnabled);
+    updateTransformControlsSnap();
   }
   snapToggle.addEventListener('change', updateSnapToggle);
   updateSnapToggle();
@@ -1710,6 +1780,42 @@ function setupSidebarToggles() {
     if (e.key === ']') toggleRight();
     if (e.key === '\\') toggleBoth(); // \ = both at once
   });
+
+  // Dock toggle logic
+  var dockBtn = document.getElementById('btn-dock-toggle');
+  var wrapper = document.getElementById('viewport-wrapper');
+
+  function applyDockMode(isBottom) {
+    var wrapperEl = document.getElementById('viewport-wrapper');
+    var dockBtnEl = document.getElementById('btn-dock-toggle');
+    if (isBottom) {
+      if (wrapperEl) wrapperEl.classList.add('bottom-docked');
+      if (dockBtnEl) {
+        dockBtnEl.title = 'Dock to Right';
+      }
+    } else {
+      if (wrapperEl) wrapperEl.classList.remove('bottom-docked');
+      if (dockBtnEl) {
+        dockBtnEl.title = 'Dock to Bottom';
+      }
+    }
+    resize();
+    setTimeout(resize, 300);
+  }
+
+  var savedDock = localStorage.getItem('3darch-properties-dock');
+  if (savedDock === 'bottom') {
+    applyDockMode(true);
+  }
+
+  if (dockBtn) {
+    dockBtn.addEventListener('click', function() {
+      var isBottomNow = wrapper.classList.contains('bottom-docked');
+      var nextBottom = !isBottomNow;
+      localStorage.setItem('3darch-properties-dock', nextBottom ? 'bottom' : 'right');
+      applyDockMode(nextBottom);
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
