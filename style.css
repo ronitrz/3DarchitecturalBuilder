@@ -849,6 +849,16 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   gap: 12px;
 }
 
+/* Measurement property columns — work in right-dock (vertical) and bottom-dock (horizontal) */
+.measure-info-col  { min-width: 140px; }
+.measure-color-col { min-width: 160px; }
+.measure-delete-col { min-width: 160px; }
+
+/* Right-docked: stack them vertically with some separation */
+.measure-info-col .measure-result {
+  margin-top: 6px;
+}
+
 .measure-result {
   text-align: center;
   padding: 16px;
@@ -1228,15 +1238,65 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
 /* Bottom docked sidebar styling */
 #viewport-wrapper.bottom-docked #sidebar-right {
   width: 100%;
-  height: 165px;
+  height: 240px;
+  min-height: 80px;
+  max-height: 60vh;
   border-left: none;
   border-top: 1px solid var(--border);
+  position: relative;
 }
 
 #viewport-wrapper.bottom-docked #sidebar-right.collapsed {
   height: 0;
   border-top-color: transparent;
 }
+
+/* Drag-to-resize handle — bottom docked */
+#panel-resize-handle {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 5px;
+  cursor: ns-resize;
+  z-index: 20;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+#panel-resize-handle:hover,
+#panel-resize-handle.dragging {
+  background: var(--accent-dim);
+}
+
+#viewport-wrapper.bottom-docked #panel-resize-handle {
+  display: block;
+}
+
+/* Drag-to-resize handle — right docked */
+#panel-resize-handle-right {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 20;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+#panel-resize-handle-right:hover,
+#panel-resize-handle-right.dragging {
+  background: var(--accent-dim);
+}
+
+#viewport-wrapper.bottom-docked #panel-resize-handle-right {
+  display: none;
+}
+
 
 /* Reposition toggle button for bottom-docked */
 #viewport-wrapper.bottom-docked .sidebar-toggle-right {

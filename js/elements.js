@@ -88,8 +88,8 @@ function _gabledRoof(w, h, d, color) {
   shape.closePath();
   const extSettings = { depth: d, bevelEnabled: false };
   const geo = new THREE.ExtrudeGeometry(shape, extSettings);
-  geo.rotateX(-Math.PI / 2);
-  geo.translate(0, 0, d / 2);
+  // Centre along Z — no rotation needed; extrusion already lies horizontally
+  geo.translate(0, 0, -d / 2);
   const mesh = new THREE.Mesh(geo, _mat(color || 0x8b4513, 0.8, 0));
   mesh.castShadow = true;
   return mesh;
@@ -433,13 +433,13 @@ _reg('roof-gabled', 'Gabled Roof', '⛺', 'Roofing', 6, 1.8, 5, function(d) {
 
 _reg('roof-hipped', 'Hipped Roof', '🏠', 'Roofing', 6, 1.5, 5, function(d) {
   var g = _group();
-  // Approximate with a low pyramid
+  // Trapezoidal cross-section extruded along Z (depth)
   var shape = new THREE.Shape();
   shape.moveTo(-d.w/2, 0); shape.lineTo(d.w/2, 0); shape.lineTo(d.w/4, d.h); shape.lineTo(-d.w/4, d.h); shape.closePath();
   var ext = { depth: d.d, bevelEnabled: false };
   var geo = new THREE.ExtrudeGeometry(shape, ext);
-  geo.rotateX(-Math.PI/2);
-  geo.translate(0, 0, d.d/2);
+  // Centre along Z — no rotation needed
+  geo.translate(0, 0, -d.d/2);
   var mesh = new THREE.Mesh(geo, _mat(0x8b3a1a, 0.8, 0));
   mesh.castShadow = true;
   g.add(mesh);
@@ -448,14 +448,14 @@ _reg('roof-hipped', 'Hipped Roof', '🏠', 'Roofing', 6, 1.5, 5, function(d) {
 
 _reg('roof-shed', 'Shed Roof', '↗️', 'Roofing', 5, 1.2, 4, function(d) {
   var g = _group();
+  // Sloped cross-section in XY plane, extruded along Z (depth) — no rotation needed
   var shape = new THREE.Shape();
-  shape.moveTo(0, 0); shape.lineTo(d.w, 0); shape.lineTo(d.w, d.h); shape.lineTo(0, 0.15); shape.closePath();
+  shape.moveTo(-d.w/2, 0); shape.lineTo(d.w/2, 0); shape.lineTo(d.w/2, d.h); shape.lineTo(-d.w/2, 0.15); shape.closePath();
   var ext = { depth: d.d, bevelEnabled: false };
   var geo = new THREE.ExtrudeGeometry(shape, ext);
-  geo.rotateX(-Math.PI/2);
-  geo.translate(-d.w/2, 0, d.d/2);
+  geo.translate(0, 0, -d.d/2);
   var mesh = new THREE.Mesh(geo, _mat(0x7a6020, 0.8, 0));
-  mesh.castShadow = true;
+  mesh.castShadow = true; mesh.receiveShadow = true;
   g.add(mesh);
   return g;
 });
@@ -490,6 +490,7 @@ _reg('dome', 'Dome / Cupola', '⛩️', 'Roofing', 4, 2.0, 4, function(d) {
 
 _reg('roof-butterfly', 'Butterfly Roof', '🦋', 'Roofing', 6, 1.2, 4, function(d) {
   var g = _group();
+  // V-shape cross-section in XY plane, extruded along Z (depth)
   var shape1 = new THREE.Shape();
   shape1.moveTo(-d.w/2, d.h); shape1.lineTo(0, 0); shape1.lineTo(0, 0.1); shape1.lineTo(-d.w/2, d.h+0.1); shape1.closePath();
   var shape2 = new THREE.Shape();
@@ -497,7 +498,8 @@ _reg('roof-butterfly', 'Butterfly Roof', '🦋', 'Roofing', 6, 1.2, 4, function(
   for (var sh of [shape1, shape2]) {
     var ext = { depth: d.d, bevelEnabled: false };
     var geo = new THREE.ExtrudeGeometry(sh, ext);
-    geo.rotateX(-Math.PI/2); geo.translate(0, 0, d.d/2);
+    // Centre along Z — no rotation needed
+    geo.translate(0, 0, -d.d/2);
     var mesh = new THREE.Mesh(geo, _mat(0x6a8090, 0.6, 0.1));
     mesh.castShadow = true;
     g.add(mesh);

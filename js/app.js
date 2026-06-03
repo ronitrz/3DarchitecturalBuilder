@@ -92,6 +92,7 @@ var App = {
   measureSnapPoint: null,      // Current calculated snap Vector3
   measureSnapIndicator: null,  // Snapping indicator mesh
   lastHoverPt: null,           // Last calculated hover/mouse point in measure mode
+  tempDisabledOrbit: false,    // Temporarily disabled OrbitControls during snap click
 };
 
 // ══════════════════════════════════════════════════════════════
@@ -521,6 +522,15 @@ function clearGhost() {
 function updateGhostPosition() {
   if (!App.ghostObject) return;
 
+  // Identify whether the active tool is a ceiling/slab/beam type
+  var activeElem = ELEM_REGISTRY[App.activeTool];
+  var isRoofOrCeiling = activeElem && (
+    activeElem.category === 'Roofing' ||
+    activeElem.id === 'ceiling' ||
+    activeElem.id === 'floor-slab' ||
+    activeElem.id === 'beam'
+  );
+
   // Magnetic Snapping
   if (App.magnetEnabled) {
     App.raycaster.setFromCamera(App.mouse, App.camera);
@@ -542,6 +552,8 @@ function updateGhostPosition() {
         var boxGhost = new THREE.Box3().setFromObject(App.ghostObject);
         var sizeGhost = new THREE.Vector3();
         boxGhost.getSize(sizeGhost);
+        var centerGhost = new THREE.Vector3();
+        boxGhost.getCenter(centerGhost);
 
         var localNormal = hits[0].face.normal.clone();
         var normalMatrix = new THREE.Matrix3().getNormalMatrix(hitMesh.matrixWorld);
@@ -551,46 +563,53 @@ function updateGhostPosition() {
         var absY = Math.abs(worldNormal.y);
         var absZ = Math.abs(worldNormal.z);
 
-        var snapPos = new THREE.Vector3().copy(rootObj.position);
-
-        // Check if current ghost is a roof, ceiling, slab, or beam
-        var isRoofOrCeiling = false;
-        var activeElem = ELEM_REGISTRY[App.activeTool];
-        if (activeElem) {
-          isRoofOrCeiling = (activeElem.category === 'Roofing' || activeElem.id === 'ceiling' || activeElem.id === 'floor-slab' || activeElem.id === 'beam');
-        }
+        var snapPos = new THREE.Vector3();
 
         if (isRoofOrCeiling) {
-          // Force snap Y to the top of the root element
+          // ── Ceiling/slab: always snap to top of whatever is under the cursor ──
+          // Y: bottom of ghost flush with top of target
           snapPos.y = boxRoot.max.y;
+          // X/Z: use grid-snapped hit point so the user can tile freely
           var gridSnapped = snapToGrid(hits[0].point);
           snapPos.x = gridSnapped.x;
           snapPos.z = gridSnapped.z;
+
+          // Remember the last good ceiling height for the fallback
+          App._ceilingSnapY = snapPos.y;
+
         } else if (absY > absX && absY > absZ) {
+          // ── Top/Bottom face hit ──
           if (worldNormal.y > 0) {
             snapPos.y = boxRoot.max.y;
           } else {
-            snapPos.y = Math.max(0, boxRoot.min.y - sizeGhost.y);
+            snapPos.y = boxRoot.min.y - sizeGhost.y;
           }
           var gridSnapped = snapToGrid(hits[0].point);
           snapPos.x = gridSnapped.x;
           snapPos.z = gridSnapped.z;
+
         } else if (absX > absY && absX > absZ) {
+          // ── Side face (X axis) hit — snap edge-to-edge using bounding boxes ──
           if (worldNormal.x > 0) {
-            snapPos.x = rootObj.position.x + (sizeRoot.x + sizeGhost.x) / 2;
+            // Hit the +X face: place ghost so its -X edge touches target's +X edge
+            snapPos.x = boxRoot.max.x + sizeGhost.x / 2;
           } else {
-            snapPos.x = rootObj.position.x - (sizeRoot.x + sizeGhost.x) / 2;
+            // Hit the -X face: place ghost so its +X edge touches target's -X edge
+            snapPos.x = boxRoot.min.x - sizeGhost.x / 2;
           }
-          snapPos.y = rootObj.position.y;
-          snapPos.z = rootObj.position.z;
+          // Align Y and Z centers
+          snapPos.y = centerRoot.y;
+          snapPos.z = centerRoot.z;
+
         } else {
+          // ── Side face (Z axis) hit — snap edge-to-edge using bounding boxes ──
           if (worldNormal.z > 0) {
-            snapPos.z = rootObj.position.z + (sizeRoot.z + sizeGhost.z) / 2;
+            snapPos.z = boxRoot.max.z + sizeGhost.z / 2;
           } else {
-            snapPos.z = rootObj.position.z - (sizeRoot.z + sizeGhost.z) / 2;
+            snapPos.z = boxRoot.min.z - sizeGhost.z / 2;
           }
-          snapPos.y = rootObj.position.y;
-          snapPos.x = rootObj.position.x;
+          snapPos.y = centerRoot.y;
+          snapPos.x = centerRoot.x;
         }
 
         App.ghostObject.position.copy(snapPos);
@@ -600,10 +619,20 @@ function updateGhostPosition() {
     }
   }
 
+  // ── Fallback: no hit — use ground plane ──
   var pt = getGroundIntersection();
   if (!pt) return;
   var snapped = snapToGrid(pt);
-  App.ghostObject.position.set(snapped.x, App._ghostHeight || 0, snapped.z);
+
+  if (isRoofOrCeiling) {
+    // Keep ceiling at last snapped height (don't drop to ground)
+    var fallbackY = (App._ceilingSnapY !== undefined && App._ceilingSnapY > 0)
+      ? App._ceilingSnapY
+      : (App._ghostHeight || 0);
+    App.ghostObject.position.set(snapped.x, fallbackY, snapped.z);
+  } else {
+    App.ghostObject.position.set(snapped.x, App._ghostHeight || 0, snapped.z);
+  }
   App.ghostObject.rotation.y = _ghostYaw;
 }
 
@@ -1255,36 +1284,37 @@ function showMeasurementProperties() {
   
   var dist = m.points[0].distanceTo(m.points[1]);
   var body = document.getElementById('properties-body');
-  
-  var html = '<div class="measure-panel">';
-  html += '<div style="padding:10px 8px 4px; flex-shrink: 0; min-width: 120px;">';
-  html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary)">Selected Measurement</div>';
-  html += '<div style="font-size:10px;color:var(--text-muted)">Interactive CAD Measure Line</div>';
-  html += '</div>';
 
-  // Distance display
+  // Wrapper is a flex row in bottom-docked mode; each sibling becomes a column.
+  var html = '';
+
+  // ── Column 1: title + distance ───────────────────────────────
+  html += '<div class="prop-section measure-info-col">';
+  html += '<div class="prop-section-title">Measurement</div>';
   html += '<div class="measure-result">';
   html += '<div class="dist-value">' + formatDim(dist) + '</div>';
-  html += '<div class="dist-label">Distance</div></div>';
+  html += '<div class="dist-label">Distance</div>';
+  html += '</div>';
+  html += '</div>';
 
-  // Color selection
-  html += '<div class="prop-section">';
+  // ── Column 2: colour picker ──────────────────────────────────
+  html += '<div class="prop-section measure-color-col">';
   html += '<div class="prop-section-title">Appearance</div>';
   html += '<div class="prop-color-wrap">';
   html += '<label class="prop-label">Line Color</label>';
   html += '<label class="prop-color-swatch"><input type="color" id="measure-color" value="' + m.color + '"></label>';
   html += '<span id="measure-color-hex" style="font-size:11px;color:var(--text-muted)">' + m.color + '</span>';
-  html += '</div></div>';
+  html += '</div>';
+  html += '</div>';
 
-  // Actions
-  html += '<div class="prop-section">';
+  // ── Column 3: delete action ──────────────────────────────────
+  html += '<div class="prop-section measure-delete-col">';
+  html += '<div class="prop-section-title">Actions</div>';
   html += '<button class="prop-btn danger" id="btn-delete-measure" style="width:100%">✕ Delete Measurement</button>';
   html += '</div>';
-  
-  html += '</div>';
-  
+
   body.innerHTML = html;
-  
+
   // Wire events
   var colorInput = document.getElementById('measure-color');
   if (colorInput) {
@@ -1926,6 +1956,13 @@ function setActiveTool(elementId) {
   App.activeMode = 'place';
   _ghostYaw = 0;
   App._ghostHeight = 0;
+  App._ceilingSnapY = undefined;
+  if (App.orbitControls) {
+    App.orbitControls.enabled = true;
+    // Restore left-click orbit when leaving measure mode
+    App.orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+  }
+  App.tempDisabledOrbit = false;
 
   // Update cursor
   document.getElementById('three-canvas').className = 'placing';
@@ -1957,6 +1994,13 @@ function setSelectMode() {
   clearGhost();
   _ghostYaw = 0;
   App._ghostHeight = 0;
+  App._ceilingSnapY = undefined;
+  if (App.orbitControls) {
+    App.orbitControls.enabled = true;
+    // Restore left-click orbit when leaving measure mode
+    App.orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+  }
+  App.tempDisabledOrbit = false;
 
   var tip = document.getElementById('ghost-rotate-tip');
   if (tip) tip.classList.remove('visible');
@@ -1976,13 +2020,21 @@ function setMeasureMode() {
   App.activeMode = 'measure';
   clearGhost();
   deselectObject();
+  if (App.orbitControls) {
+    App.orbitControls.enabled = true;
+    // Disable left-click orbit in measure mode — left clicks are reserved for placing measurement points.
+    // The camera can still be orbited with the right mouse button (which is bound to PAN; orbit is lost
+    // in measure mode intentionally so clicks never accidentally move the view).
+    App.orbitControls.mouseButtons.LEFT = null;
+  }
+  App.tempDisabledOrbit = false;
 
   document.getElementById('three-canvas').className = 'measuring';
   document.querySelectorAll('.elem-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.qtool').forEach(function(b) { b.classList.remove('active'); });
   document.getElementById('qtool-measure').classList.add('active');
 
-  document.getElementById('hint-text').textContent = 'Click two points to measure distance · Esc to exit';
+  document.getElementById('hint-text').textContent = 'Click two points to measure distance · Right-drag to orbit · Esc to exit';
   document.getElementById('st-mode').textContent = '📏 Measure';
   document.getElementById('st-mode').className = 'st-chip st-measuring';
 
@@ -2141,6 +2193,10 @@ function onMouseDown(e) {
       App.draggedMeasurement = hitHandle.userData.measurement;
       App.orbitControls.enabled = false;
       selectMeasurement(App.draggedMeasurement);
+    } else if (App.measureSnapIndicator && App.measureSnapIndicator.visible) {
+      // Temporarily disable OrbitControls to prevent screen moving when clicking on a connection/snap point
+      App.orbitControls.enabled = false;
+      App.tempDisabledOrbit = true;
     }
   }
 }
@@ -2151,10 +2207,38 @@ function onMouseUp(e) {
 
   // Handle measurement drag release
   if (App.activeMode === 'measure' && App.draggedHandle) {
+    var wasDrag = false;
+    var dx0 = e.clientX - (App.mouseDownPos ? App.mouseDownPos.x : e.clientX);
+    var dy0 = e.clientY - (App.mouseDownPos ? App.mouseDownPos.y : e.clientY);
+    if (Math.sqrt(dx0*dx0 + dy0*dy0) > 5) wasDrag = true;
+
+    var clickedHandle = App.draggedHandle; // save before clearing
     App.draggedHandle = null;
     App.draggedMeasurement = null;
     App.orbitControls.enabled = true;
+
+    if (!wasDrag) {
+      // It was a click on a dot — use that dot's 3D position as the measurement snap point
+      var snapPt = clickedHandle.position.clone();
+      if (App.pendingMeasureStart) {
+        // Complete the line from pending start to this dot
+        createMeasurement(App.pendingMeasureStart, snapPt);
+        App.pendingMeasureStart = null;
+        clearTempMeasureLine();
+        updateMeasurePanel();
+      } else {
+        // Start a new measurement from this dot
+        App.pendingMeasureStart = snapPt;
+        updateMeasurePanel();
+      }
+    }
     return;
+  }
+
+  // Restore orbit controls if it was temporarily disabled for snapping
+  if (App.tempDisabledOrbit) {
+    App.orbitControls.enabled = true;
+    App.tempDisabledOrbit = false;
   }
 
   // Check for drag vs click
@@ -2348,6 +2432,97 @@ function setupSidebarToggles() {
       localStorage.setItem('3darch-properties-dock', nextBottom ? 'bottom' : 'right');
       applyDockMode(nextBottom);
     });
+  }
+
+  // ─── Drag-to-resize: bottom-docked panel (vertical) ───────────────────────
+  var resizeHandleBottom = document.getElementById('panel-resize-handle');
+  var sidebarRight = document.getElementById('sidebar-right');
+
+  if (resizeHandleBottom && sidebarRight) {
+    var _resizingBottom = false;
+    var _resizeStartY = 0;
+    var _resizeStartH = 0;
+
+    resizeHandleBottom.addEventListener('mousedown', function(e) {
+      if (!wrapper.classList.contains('bottom-docked')) return;
+      _resizingBottom = true;
+      _resizeStartY = e.clientY;
+      _resizeStartH = sidebarRight.offsetHeight;
+      resizeHandleBottom.classList.add('dragging');
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+      if (!_resizingBottom) return;
+      var delta = _resizeStartY - e.clientY; // drag up = bigger panel
+      var newH = Math.min(Math.max(_resizeStartH + delta, 80), window.innerHeight * 0.6);
+      sidebarRight.style.height = newH + 'px';
+      resize();
+    });
+
+    document.addEventListener('mouseup', function() {
+      if (!_resizingBottom) return;
+      _resizingBottom = false;
+      resizeHandleBottom.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Persist height
+      localStorage.setItem('3darch-panel-height', sidebarRight.offsetHeight);
+      resize();
+    });
+
+    // Restore saved height
+    var savedH = parseInt(localStorage.getItem('3darch-panel-height'));
+    if (!isNaN(savedH) && savedH >= 80) {
+      sidebarRight.style.height = savedH + 'px';
+    }
+  }
+
+  // ─── Drag-to-resize: right-docked panel (horizontal) ─────────────────────
+  var resizeHandleRight = document.getElementById('panel-resize-handle-right');
+
+  if (resizeHandleRight && sidebarRight) {
+    var _resizingRight = false;
+    var _resizeRightStartX = 0;
+    var _resizeRightStartW = 0;
+
+    resizeHandleRight.addEventListener('mousedown', function(e) {
+      if (wrapper.classList.contains('bottom-docked')) return;
+      _resizingRight = true;
+      _resizeRightStartX = e.clientX;
+      _resizeRightStartW = sidebarRight.offsetWidth;
+      resizeHandleRight.classList.add('dragging');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+      if (!_resizingRight) return;
+      var delta = _resizeRightStartX - e.clientX; // drag left = wider panel
+      var newW = Math.min(Math.max(_resizeRightStartW + delta, 200), window.innerWidth * 0.45);
+      sidebarRight.style.width = newW + 'px';
+      resize();
+    });
+
+    document.addEventListener('mouseup', function() {
+      if (!_resizingRight) return;
+      _resizingRight = false;
+      resizeHandleRight.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Persist width
+      localStorage.setItem('3darch-panel-width', sidebarRight.offsetWidth);
+      resize();
+    });
+
+    // Restore saved width
+    var savedW = parseInt(localStorage.getItem('3darch-panel-width'));
+    if (!isNaN(savedW) && savedW >= 200) {
+      sidebarRight.style.width = savedW + 'px';
+    }
   }
 }
 
