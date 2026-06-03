@@ -932,7 +932,7 @@ function updatePropertiesPanel() {
   var html = '';
 
   // ── Element name ─────────────────────────────────────────────
-  html += '<div style="padding:10px 8px 4px">';
+  html += '<div style="padding:10px 8px 4px; flex-shrink: 0; min-width: 120px;">';
   html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary)">' + (ud.elementName || obj.name) + '</div>';
   html += '<div style="font-size:10px;color:var(--text-muted)">' + (ud.category || '') + '</div>';
   html += '</div>';
@@ -1614,6 +1614,20 @@ function setupEvents() {
       updateGhostPosition();
     }
   }, { passive: false });
+
+  // Properties body horizontal scroll wheel support in bottom dock mode
+  var propBody = document.getElementById('properties-body');
+  if (propBody) {
+    propBody.addEventListener('wheel', function(e) {
+      var wrapper = document.getElementById('viewport-wrapper');
+      if (wrapper && wrapper.classList.contains('bottom-docked')) {
+        if (e.deltaY !== 0) {
+          e.preventDefault();
+          propBody.scrollLeft += e.deltaY;
+        }
+      }
+    }, { passive: false });
+  }
 
   // Hide context menu on any click
   document.addEventListener('mousedown', function(e) {

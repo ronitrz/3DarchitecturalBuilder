@@ -1242,7 +1242,20 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   gap: 16px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 8px 12px;
+  padding: 8px 12px 14px;
+  width: 100%;
+}
+
+/* Scrollbar styling for bottom mode properties body */
+#viewport-wrapper.bottom-docked #properties-body::-webkit-scrollbar {
+  height: 6px;
+}
+#viewport-wrapper.bottom-docked #properties-body::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 3px;
+}
+#viewport-wrapper.bottom-docked #properties-body::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }
 
 #viewport-wrapper.bottom-docked #properties-body #no-selection {
@@ -1256,7 +1269,8 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   margin-bottom: 2px;
 }
 
-#viewport-wrapper.bottom-docked .prop-section {
+#viewport-wrapper.bottom-docked .prop-section,
+#viewport-wrapper.bottom-docked .measure-panel {
   margin-bottom: 0;
   flex-shrink: 0;
   display: flex;
@@ -1267,7 +1281,8 @@ input[type="range"].prop-slider::-webkit-slider-thumb:hover {
   padding-right: 16px;
 }
 
-#viewport-wrapper.bottom-docked .prop-section:last-child {
+#viewport-wrapper.bottom-docked .prop-section:last-child,
+#viewport-wrapper.bottom-docked .measure-panel:last-child {
   border-right: none;
   padding-right: 0;
 }
