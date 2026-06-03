@@ -1,0 +1,18 @@
+# Video and media files
+*.mp4
+*.gif
+
+# Python environment and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+.env
+
+# System files
+.DS_Store
+Thumbs.db
